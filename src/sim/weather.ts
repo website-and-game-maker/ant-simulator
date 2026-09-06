@@ -11,10 +11,16 @@ const DAY_LENGTH_SECONDS = 150; // one full day/night cycle, in sim-seconds
 export class WeatherSystem {
   private clock = 0; // 0..DAY_LENGTH_SECONDS, wraps
   weather: WeatherState = 'clear';
-  private weatherTimer = range0(20, 50);
+  private weatherTimer: number;
   rainIntensity = 0;
 
-  constructor(private rng: RNG) {}
+  constructor(private rng: RNG) {
+    // Drawn from the seeded RNG (not Math.random()) so two runs with the
+    // same seed see their first weather change at the same moment — weather
+    // affects puddles, pheromone evaporation, and ant deaths, so this
+    // mattered for reproducibility.
+    this.weatherTimer = WeatherSystem.rand(this.rng, 20, 50);
+  }
 
   private static rand(rng: RNG, min: number, max: number) {
     return min + rng() * (max - min);
@@ -92,8 +98,4 @@ export class WeatherSystem {
   get evaporationMultiplier(): number {
     return this.weather === 'storm' ? 2.4 : this.weather === 'rain' ? 1.6 : 1;
   }
-}
-
-function range0(min: number, max: number): number {
-  return min + Math.random() * (max - min);
 }

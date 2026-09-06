@@ -58,6 +58,10 @@ function fmt(n: number): string {
 
 interface HudOptions {
   onFocusPosition?: (pos: Vec2) => void;
+  /** Called right after a tier switch or restart regenerates the world —
+   * the renderer needs to re-apply the new tier's DPR cap and re-frame the
+   * camera on the (possibly very differently sized) new world. */
+  onWorldReset?: () => void;
 }
 
 /**
@@ -148,7 +152,10 @@ export class HUD {
     const un3 = this.sim.events.on('nuptialFlight', (e) =>
       this.pushToast(`🦋 Nuptial flight! Colony #${e.colonyId} sends alates into the sky.`, '🦋'),
     );
-    this.unsubscribers.push(un, un2, un3);
+    const un4 = this.sim.events.on('colonyPlacementFailed', () =>
+      this.pushToast("🚫 No room for a colony there — try open ground, away from the edge.", '🚫'),
+    );
+    this.unsubscribers.push(un, un2, un3, un4);
 
     window.addEventListener('keydown', this.onKeyDown);
     this.unsubscribers.push(() => window.removeEventListener('keydown', this.onKeyDown));
@@ -270,6 +277,7 @@ export class HUD {
       btn.addEventListener('click', () => {
         this.sim.setTier(tier);
         this.refreshTierButtons(tierWrap);
+        this.opts.onWorldReset?.();
       });
       btn.dataset.tier = tier;
       tierWrap.appendChild(btn);
@@ -332,6 +340,7 @@ export class HUD {
       this.sim.restart();
       this.confirmingRestart = false;
       this.restartBtn.textContent = 'Restart simulation';
+      this.opts.onWorldReset?.();
     });
     panel.appendChild(this.restartBtn);
 

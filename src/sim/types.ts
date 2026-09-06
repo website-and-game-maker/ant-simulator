@@ -179,6 +179,7 @@ export interface PredatorSnapshot {
   pos: Vec2;
   heading: number;
   health: number;
+  maxHealth: number;
   state: 'wander' | 'hunt' | 'attack' | 'retreat' | 'dead';
 }
 
@@ -251,6 +252,10 @@ export interface SimEventMap {
   weatherChanged: { weather: WeatherState };
   dayNightChanged: { isDay: boolean };
   nuptialFlight: { colonyId: number; count: number };
+  /** A player-initiated `foundColonyAt` couldn't find any legal ground near
+   * the requested point (off-map, buried in rock, etc.) — the UI should
+   * tell the player the click didn't do anything, rather than staying silent. */
+  colonyPlacementFailed: { pos: Vec2 };
 }
 
 export type SimEventName = keyof SimEventMap;

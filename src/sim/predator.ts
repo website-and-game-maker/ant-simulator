@@ -130,6 +130,7 @@ export class Predator implements Combatant {
       pos: { ...this.pos },
       heading: this.heading,
       health: this.health,
+      maxHealth: this.maxHealth,
       state: this.alive ? this.state : 'dead',
     };
   }

@@ -11,6 +11,15 @@ interface Raindrop {
   speed: number;
 }
 
+interface DustMote {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  twinklePhase: number;
+}
+
 const TASK_TINT: Partial<Record<AntSnapshot['task'], string>> = {
   engaging: '#ff5252',
   fleeing: '#ffd54a',
@@ -36,6 +45,7 @@ export class Renderer {
 
   private legPhases = new Map<number, number>();
   private raindrops: Raindrop[] = [];
+  private dustMotes: DustMote[] = [];
   private lightningFlash = 0;
   private clock = 0;
   private lastDt = 1 / 60;
@@ -233,10 +243,20 @@ export class Renderer {
 
     ctx.save();
     ctx.translate(s.x, s.y);
+
+    // A small grounded drop shadow reads as depth and stops ants from
+    // looking like flat stickers pasted on the terrain. Drawn before the
+    // heading rotation so it stays a simple "shadow under the body" ellipse
+    // regardless of which way the ant is facing.
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath();
+    ctx.ellipse(0, bodyLen * 0.12, bodyLen * 0.4, bodyLen * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.rotate(a.heading);
 
-    const lightness = a.selected ? 70 : 42 + (a.energy / 100) * 10;
-    let color = `hsl(${a.genetics.hue}, 55%, ${lightness}%)`;
+    const lightness = a.selected ? 74 : 46 + (a.energy / 100) * 12;
+    let color = `hsl(${a.genetics.hue}, 68%, ${lightness}%)`;
     const tint = TASK_TINT[a.task];
     if (tint) color = blend(color, tint, 0.4);
 
@@ -255,11 +275,20 @@ export class Renderer {
     }
 
     ctx.fillStyle = color;
+    ctx.strokeStyle = 'rgba(20,12,6,0.5)';
+    ctx.lineWidth = Math.max(0.3, bodyLen * 0.05);
     ctx.beginPath();
     ctx.ellipse(-bodyLen * 0.18, 0, bodyLen * 0.42, bodyLen * 0.28, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.stroke();
     ctx.beginPath();
     ctx.ellipse(bodyLen * 0.32, 0, bodyLen * 0.22, bodyLen * 0.18, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // A tiny highlight gives the carapace some shine instead of a flat fill.
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.beginPath();
+    ctx.ellipse(-bodyLen * 0.24, -bodyLen * 0.09, bodyLen * 0.14, bodyLen * 0.07, -0.4, 0, Math.PI * 2);
     ctx.fill();
 
     if (isAlate) {
@@ -334,12 +363,12 @@ export class Renderer {
     ctx.restore();
 
     // Health bar for anything that's taken damage.
-    if (p.health < 100 * 0.98) {
+    if (p.health < p.maxHealth * 0.98) {
       const w = size * 1.4;
       ctx.fillStyle = 'rgba(0,0,0,0.4)';
       ctx.fillRect(s.x - w / 2, s.y - size - 6, w, 3);
       ctx.fillStyle = '#e05050';
-      ctx.fillRect(s.x - w / 2, s.y - size - 6, w * Math.max(0, p.health / 400), 3);
+      ctx.fillRect(s.x - w / 2, s.y - size - 6, w * Math.max(0, p.health / p.maxHealth), 3);
     }
   }
 
@@ -491,6 +520,37 @@ export class Renderer {
       ctx.fillRect(0, 0, this.cssW, this.cssH);
       this.lightningFlash = Math.max(0, this.lightningFlash - dt * 3);
     }
+
+    // Ambient dust/pollen motes drift year-round (not just in rain) — a
+    // static scene otherwise reads as dead rather than alive.
+    const dustTarget = enabled && !active ? Math.round(maxParticles * 0.12) : 0;
+    while (this.dustMotes.length < dustTarget) {
+      this.dustMotes.push({
+        x: Math.random() * this.cssW,
+        y: Math.random() * this.cssH,
+        vx: (Math.random() - 0.5) * 8,
+        vy: -3 - Math.random() * 6,
+        size: 0.8 + Math.random() * 1.6,
+        twinklePhase: Math.random() * Math.PI * 2,
+      });
+    }
+    if (this.dustMotes.length > dustTarget) this.dustMotes.length = dustTarget;
+    for (const m of this.dustMotes) {
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      m.twinklePhase += dt * 1.5;
+      if (m.y < -10) {
+        m.y = this.cssH + 10;
+        m.x = Math.random() * this.cssW;
+      }
+      if (m.x < -10) m.x = this.cssW + 10;
+      if (m.x > this.cssW + 10) m.x = -10;
+      const alpha = 0.15 + Math.sin(m.twinklePhase) * 0.1;
+      ctx.fillStyle = `rgba(230, 240, 200, ${Math.max(0, alpha)})`;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   private renderLighting(snapshot: WorldSnapshot) {
@@ -508,6 +568,21 @@ export class Renderer {
       ctx.fillStyle = `rgba(60,65,70,${snapshot.weather === 'storm' ? 0.28 : 0.15})`;
       ctx.fillRect(0, 0, this.cssW, this.cssH);
     }
+
+    // A soft vignette gives the scene some depth instead of reading as a
+    // flat, evenly-lit rectangle.
+    const vignette = ctx.createRadialGradient(
+      this.cssW / 2,
+      this.cssH / 2,
+      Math.min(this.cssW, this.cssH) * 0.35,
+      this.cssW / 2,
+      this.cssH / 2,
+      Math.max(this.cssW, this.cssH) * 0.72,
+    );
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.18)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, this.cssW, this.cssH);
   }
 
   private renderMinimap(snapshot: WorldSnapshot) {

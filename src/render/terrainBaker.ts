@@ -2,13 +2,17 @@ import type { BiomeType, Obstacle, TerrainGridData } from '../sim/types';
 
 const BIOME_NAMES: BiomeType[] = ['grass', 'dirt', 'sand', 'rock', 'puddle', 'leafLitter'];
 
+// A bit more saturated/contrasty than real dirt — this is a stylized
+// simulator, not a satellite photo, and flat muted tones were reading as
+// dull. These get smoothly interpolated between cells (see below), so
+// pushing them punchier here doesn't turn into garish hard blocks.
 const BIOME_COLORS: Record<BiomeType, [number, number, number]> = {
-  grass: [58, 99, 47],
-  dirt: [92, 66, 46],
-  sand: [193, 170, 110],
-  rock: [110, 108, 104],
-  puddle: [58, 88, 96],
-  leafLitter: [128, 92, 52],
+  grass: [64, 128, 51],
+  dirt: [110, 76, 48],
+  sand: [214, 186, 116],
+  rock: [124, 122, 118],
+  puddle: [51, 97, 112],
+  leafLitter: [150, 103, 51],
 };
 
 function hash2(x: number, y: number): number {
@@ -38,24 +42,60 @@ export function bakeTerrain(
   canvas.height = Math.max(1, Math.round(worldHeight * scale));
   const ctx = canvas.getContext('2d')!;
 
+  // --- Base color: each cell is painted as a soft-edged radial blob
+  // (rather than a hard-edged rectangle) that overlaps its neighbors, so
+  // adjacent cells blend into each other through alpha compositing. Unlike
+  // scaling up a tiny 1px-per-cell bitmap, this keeps a real per-pixel
+  // gradient baked at full resolution — so it still looks like *something*
+  // (not a flat blur) even zoomed in close on a single cell.
+  ctx.fillStyle = `rgb(${BIOME_COLORS.dirt.join(',')})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   const cellSize = grid.cellSize * scale;
+  const blobRadius = cellSize * 1.05;
   for (let cy = 0; cy < grid.rows; cy++) {
     for (let cx = 0; cx < grid.cols; cx++) {
       const biome = BIOME_NAMES[grid.biome[cy * grid.cols + cx]];
       const [r, g, b] = BIOME_COLORS[biome];
-      const jitter = (hash2(cx, cy) - 0.5) * 18;
-      ctx.fillStyle = `rgb(${clamp255(r + jitter)}, ${clamp255(g + jitter)}, ${clamp255(b + jitter)})`;
-      ctx.fillRect(Math.floor(cx * cellSize), Math.floor(cy * cellSize), Math.ceil(cellSize) + 1, Math.ceil(cellSize) + 1);
+      const jitter = (hash2(cx, cy) - 0.5) * 22;
+      const color = `rgb(${clamp255(r + jitter)}, ${clamp255(g + jitter)}, ${clamp255(b + jitter)})`;
+      // Offset each blob's center a little so they don't all line up into a
+      // visibly repeating scale pattern.
+      const jx = (hash2(cx * 3 + 1, cy * 5 + 1) - 0.5) * cellSize * 0.5;
+      const jy = (hash2(cx * 11 + 2, cy * 13 + 2) - 0.5) * cellSize * 0.5;
+      const px = (cx + 0.5) * cellSize + jx;
+      const py = (cy + 0.5) * cellSize + jy;
+      const grad = ctx.createRadialGradient(px, py, 0, px, py, blobRadius);
+      grad.addColorStop(0, color);
+      grad.addColorStop(0.7, color);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(px - blobRadius, py - blobRadius, blobRadius * 2, blobRadius * 2);
+    }
+  }
 
-      if (biome === 'grass' || biome === 'leafLitter') {
-        for (let i = 0; i < 3; i++) {
-          const fx = hash2(cx * 7 + i, cy * 13 + i);
-          const fy = hash2(cx * 17 + i, cy * 23 + i);
-          const px = (cx + fx) * cellSize;
-          const py = (cy + fy) * cellSize;
-          ctx.fillStyle = biome === 'grass' ? 'rgba(120,190,90,0.18)' : 'rgba(180,140,70,0.2)';
-          ctx.fillRect(px, py, Math.max(1, scale * 3), Math.max(1, scale * 3));
-        }
+  // --- Texture on top: every biome gets its own fleck pattern, drawn at
+  // full resolution, so there's real detail to look at even zoomed in tight
+  // on a single cell — not just a smooth color gradient.
+  const FLECKS: Record<BiomeType, [string, number]> = {
+    grass: ['rgba(150,220,110,0.28)', 6],
+    leafLitter: ['rgba(205,160,80,0.26)', 5],
+    dirt: ['rgba(70,48,30,0.22)', 4],
+    sand: ['rgba(235,215,160,0.3)', 5],
+    rock: ['rgba(80,78,74,0.3)', 3],
+    puddle: ['rgba(120,165,185,0.2)', 3],
+  };
+  for (let cy = 0; cy < grid.rows; cy++) {
+    for (let cx = 0; cx < grid.cols; cx++) {
+      const biome = BIOME_NAMES[grid.biome[cy * grid.cols + cx]];
+      const [fleckColor, count] = FLECKS[biome];
+      ctx.fillStyle = fleckColor;
+      for (let i = 0; i < count; i++) {
+        const fx = hash2(cx * 7 + i, cy * 13 + i);
+        const fy = hash2(cx * 17 + i, cy * 23 + i);
+        const fsize = (1.5 + hash2(cx * 29 + i, cy * 31 + i) * 2.5) * scale;
+        const px = (cx + fx) * cellSize;
+        const py = (cy + fy) * cellSize;
+        ctx.fillRect(px, py, Math.max(1, fsize), Math.max(1, fsize));
       }
     }
   }
@@ -66,11 +106,16 @@ export function bakeTerrain(
     const r = o.radius * scale;
     if (o.kind === 'rock') {
       const grad = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, r * 0.1, x, y, r);
-      grad.addColorStop(0, '#9a978f');
+      grad.addColorStop(0, '#a8a59c');
       grad.addColorStop(1, '#57544e');
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      // A little occlusion shadow grounds it instead of looking pasted on.
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + r * 0.75, r * 0.9, r * 0.3, 0, 0, Math.PI * 2);
       ctx.fill();
     } else if (o.kind === 'twig') {
       ctx.strokeStyle = '#5b4326';
