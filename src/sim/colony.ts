@@ -9,6 +9,11 @@ export interface Larva {
   progress: number; // 0..1
   matureTicks: number;
   starving: boolean;
+  /** Set only on a larva that already matured once and got requeued because
+   * the global ant cap had no room — its caste was already decided (and, if
+   * it was a reproductive, already counted toward the flight window), so it
+   * must hatch as that same caste rather than rolling `decideCaste` again. */
+  presetCaste?: Exclude<Caste, 'larva' | 'queen'>;
 }
 
 let nextLarvaId = 1;
@@ -126,9 +131,11 @@ export class Colony {
    * ant population cap (shared across every colony) has no room for it
    * right now. Rather than just dropping the individual the colony already
    * paid food to raise, put it right back at the door so it tries again
-   * next tick — it'll hatch for real as soon as the cap frees up. */
-  requeueMaturedLarva(genetics: Genetics, matureTicks: number) {
-    this.larvae.push({ id: nextLarvaId++, genetics, progress: 0.999, matureTicks, starving: false });
+   * next tick — it'll hatch for real as soon as the cap frees up. Its caste
+   * was already decided (and counted, if it was a reproductive), so it's
+   * pinned via `presetCaste` rather than being decided fresh on every retry. */
+  requeueMaturedLarva(caste: Exclude<Caste, 'larva' | 'queen'>, genetics: Genetics, matureTicks: number) {
+    this.larvae.push({ id: nextLarvaId++, genetics, progress: 0.999, matureTicks, starving: false, presetCaste: caste });
   }
 
   averageGenetics(): Genetics | null {
@@ -236,7 +243,7 @@ export class Colony {
     for (const larva of this.larvae) {
       if (larva.starving && chance(rng, 0.01 * dt)) continue; // starved to death, silently culled
       if (larva.progress >= 1) {
-        const caste = this.decideCaste(rng);
+        const caste = larva.presetCaste ?? this.decideCaste(rng);
         spawns.push({ caste, genetics: larva.genetics });
         continue;
       }

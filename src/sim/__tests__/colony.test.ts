@@ -52,3 +52,36 @@ describe('claustral colony founding', () => {
     expect(colony.queenAlive).toBe(false);
   });
 });
+
+describe('requeueMaturedLarva', () => {
+  it('hatches as the same caste it was already decided as, not a fresh roll', () => {
+    // Regression test: requeuing used to drop the already-decided caste,
+    // so a larva that matured as a reproductive during a nuptial flight
+    // could re-roll as a plain worker/soldier on its next attempt (and, if
+    // it re-entered decideCaste, double-count toward the flight window).
+    const { colony, rng } = foundSoloColony();
+    colony.pendingNuptialFlight = true;
+    colony.larvae.push({
+      id: 999,
+      genetics: randomGenetics(rng, 18),
+      progress: 0.999,
+      matureTicks: DEFAULT_SPECIES.larvaMatureTicks,
+      starving: false,
+    });
+
+    const first = colony.tick(1, rng, DEFAULT_SPECIES, 0);
+    expect(first.spawn).toHaveLength(1);
+    const decidedCaste = first.spawn[0].caste;
+    expect(['alateQueen', 'drone']).toContain(decidedCaste);
+
+    // Simulate hitting the global ant cap: requeue instead of spawning.
+    colony.requeueMaturedLarva(decidedCaste as 'alateQueen' | 'drone', first.spawn[0].genetics, DEFAULT_SPECIES.larvaMatureTicks);
+    // Flip flight mode off, as if the window had ended in between — the
+    // requeued larva must still hatch as its original caste regardless.
+    colony.pendingNuptialFlight = false;
+
+    const second = colony.tick(1, rng, DEFAULT_SPECIES, 1);
+    expect(second.spawn).toHaveLength(1);
+    expect(second.spawn[0].caste).toBe(decidedCaste);
+  });
+});

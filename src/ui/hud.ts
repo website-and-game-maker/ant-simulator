@@ -152,7 +152,10 @@ export class HUD {
     const un3 = this.sim.events.on('nuptialFlight', (e) =>
       this.pushToast(`🦋 Nuptial flight! Colony #${e.colonyId} sends alates into the sky.`, '🦋'),
     );
-    this.unsubscribers.push(un, un2, un3);
+    const un4 = this.sim.events.on('colonyPlacementFailed', () =>
+      this.pushToast("🚫 No room for a colony there — try open ground, away from the edge.", '🚫'),
+    );
+    this.unsubscribers.push(un, un2, un3, un4);
 
     window.addEventListener('keydown', this.onKeyDown);
     this.unsubscribers.push(() => window.removeEventListener('keydown', this.onKeyDown));
