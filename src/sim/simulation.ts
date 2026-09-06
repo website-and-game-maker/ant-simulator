@@ -274,7 +274,12 @@ export class Simulation implements ISimulation {
       const wasAlive = colony.alive;
       const { spawn } = colony.tick(dt, this.rng, DEFAULT_SPECIES, this.simTime);
       for (const s of spawn) {
-        if (this.ants.length >= this.profile.maxAnts) break;
+        if (this.ants.length >= this.profile.maxAnts) {
+          // No room in the global population cap right now — don't just
+          // discard brood the colony already paid food to raise.
+          colony.requeueMaturedLarva(s.genetics, DEFAULT_SPECIES.larvaMatureTicks);
+          continue;
+        }
         this.spawnAnt(colony, s.caste as Ant['caste'], s.genetics);
       }
       if (wasAlive && !colony.alive) {
@@ -429,7 +434,11 @@ export class Simulation implements ISimulation {
 
   foundColonyAt(pos: Vec2): boolean {
     if (this.colonies.length >= this.profile.maxColonies) return false;
-    const site = this.terrain.findNestSite(this.rng, this.colonies.map((c) => c.nestPos), 260, pos, 40) ?? pos;
+    // If no legal spot exists near the click (e.g. it's out of bounds, or
+    // buried in rock), don't silently plant the nest on invalid ground —
+    // report failure instead so a caller/UI can tell the player it didn't work.
+    const site = this.terrain.findNestSite(this.rng, this.colonies.map((c) => c.nestPos), 260, pos, 40);
+    if (!site) return false;
     this.createFoundingColony(site, null, 0);
     return true;
   }

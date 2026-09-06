@@ -179,6 +179,7 @@ export interface PredatorSnapshot {
   pos: Vec2;
   heading: number;
   health: number;
+  maxHealth: number;
   state: 'wander' | 'hunt' | 'attack' | 'retreat' | 'dead';
 }
 

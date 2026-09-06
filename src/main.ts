@@ -15,6 +15,13 @@ renderer.fitWorldView();
 
 const hud = new HUD(uiRoot, sim, {
   onFocusPosition: (pos: Vec2) => renderer.camera.focusOn(pos, Math.max(renderer.camera.zoom, 0.7)),
+  onWorldReset: () => {
+    // A tier switch or restart just regenerated the world (new dimensions,
+    // maybe a new DPR cap) — re-apply both rather than leaving the camera
+    // framed on the old world.
+    renderer.resize();
+    renderer.fitWorldView();
+  },
 });
 
 // ---------------------------------------------------------------------
