@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+    <title>Formicarium — Ant Colony Simulator</title>
+    <meta name="description" content="A realistic, high-performance ant colony simulator: pheromone trails, genetics, multi-colony warfare, predators, weather, and adjustable graphics power." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐜</text></svg>" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="world-canvas"></canvas>
+      <canvas id="fx-canvas"></canvas>
+      <div id="ui-root"></div>
+      <div id="boot-screen">
+        <div class="boot-card">
+          <div class="boot-title">🐜 FORMICARIUM</div>
+          <div class="boot-sub">booting colony simulation…</div>
+          <div class="boot-bar"><div class="boot-bar-fill"></div></div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

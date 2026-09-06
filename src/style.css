@@ -1,0 +1,560 @@
+/* ==========================================================================
+   Base layout & boot screen.
+   Owned by app shell (main.ts). UI panel styling lives further down this
+   file, appended by the HUD module — see the marker comment near the bottom.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+  --bg: #0c1410;
+  --ink: #eaf3ea;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+}
+
+#world-canvas,
+#fx-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+#fx-canvas {
+  pointer-events: none;
+}
+
+#ui-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* individual panels opt back in */
+}
+
+#boot-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 40%, #16241a 0%, #0a120d 75%);
+  z-index: 1000;
+  transition: opacity 0.6s ease;
+}
+
+#boot-screen.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.boot-card {
+  text-align: center;
+  font-family: system-ui, sans-serif;
+}
+
+.boot-title {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #d9f5c8;
+  text-shadow: 0 0 24px rgba(160, 255, 130, 0.35);
+}
+
+.boot-sub {
+  margin-top: 0.5rem;
+  color: #9db89a;
+  font-size: 0.9rem;
+}
+
+.boot-bar {
+  margin: 1.25rem auto 0;
+  width: 220px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.boot-bar-fill {
+  height: 100%;
+  width: 40%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #6ee06e, #b6ff5c);
+  animation: boot-sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes boot-sweep {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+
+/* ==========================================================================
+   UI PANEL STYLES — appended below by src/ui/*.ts (HUD, settings, inspector,
+   stats, controls). Keep new rules under this marker.
+   ========================================================================== */
+
+:root {
+  --panel-bg: rgba(18, 26, 20, 0.72);
+  --panel-border: rgba(255, 255, 255, 0.09);
+  --panel-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  --accent: #8fd166;
+  --accent-amber: #e0a95c;
+  --danger: #e0605c;
+  --text-dim: #9fb59a;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+}
+
+.hud-root {
+  position: absolute;
+  inset: 0;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.hud-root .hidden {
+  display: none !important;
+}
+
+.hud-panel {
+  position: absolute;
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--panel-shadow);
+  padding: 12px 14px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.hud-title {
+  font-weight: 800;
+  font-size: 15px;
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+}
+
+.hud-subtitle {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 10px 0 6px;
+}
+.hud-subtitle.small {
+  font-size: 10.5px;
+  margin-top: 12px;
+}
+.hud-subtitle:first-child {
+  margin-top: 0;
+}
+
+/* --- Stats panel --- */
+.hud-stats {
+  top: 14px;
+  left: 14px;
+  width: 210px;
+  transition: transform 0.2s ease;
+}
+.stat-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.stat-icon {
+  width: 18px;
+  text-align: center;
+}
+.stat-label {
+  flex: 1;
+  color: var(--text-dim);
+}
+.stat-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.stat-causes {
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+/* --- Colony leaderboard --- */
+.hud-colonies {
+  top: 230px;
+  left: 14px;
+  width: 210px;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+.colony-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.colony-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.colony-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.colony-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: capitalize;
+}
+.colony-pop {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.colony-empty {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 4px 2px;
+}
+
+/* --- Settings --- */
+.hud-settings-wrap {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
+.hud-icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  color: var(--ink);
+  font-size: 18px;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.hud-icon-btn:hover {
+  background: rgba(40, 55, 42, 0.85);
+  transform: scale(1.05);
+}
+.hud-settings {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  width: 260px;
+  max-height: 78vh;
+  overflow-y: auto;
+}
+.tier-list,
+.speed-list,
+.view-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.speed-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+.view-toggle {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.tier-btn,
+.speed-btn,
+.view-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  cursor: pointer;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.speed-btn,
+.view-btn {
+  flex: 1;
+  text-align: center;
+  min-width: 42px;
+}
+.tier-btn:hover,
+.speed-btn:hover,
+.view-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+.tier-btn.active,
+.speed-btn.active,
+.view-btn.active {
+  border-color: var(--accent);
+  background: rgba(143, 209, 102, 0.16);
+}
+.tier-label {
+  font-weight: 700;
+}
+.tier-blurb {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.restart-btn {
+  width: 100%;
+  margin-top: 14px;
+  padding: 9px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--danger);
+  background: rgba(224, 96, 92, 0.14);
+  color: #ffb3b0;
+  cursor: pointer;
+  font-size: 12.5px;
+  transition: background 0.15s ease;
+}
+.restart-btn:hover {
+  background: rgba(224, 96, 92, 0.28);
+}
+
+/* --- Inspector --- */
+.hud-inspector {
+  bottom: 92px;
+  right: 14px;
+  width: 240px;
+}
+.inspector-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+}
+.inspector-close:hover {
+  color: var(--ink);
+}
+.inspector-task {
+  color: var(--accent-amber);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.inspector-age {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  margin-bottom: 4px;
+}
+.meter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0;
+}
+.meter-label {
+  width: 84px;
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.meter-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+.caste-bars {
+  margin-top: 6px;
+}
+.caste-row {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 1px 0;
+}
+
+/* --- Tool bar --- */
+.hud-toolbar-wrap {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.hud-toolbar {
+  display: flex;
+  gap: 4px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 6px;
+  box-shadow: var(--panel-shadow);
+}
+.tool-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--ink);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+.tool-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.tool-btn.active {
+  background: rgba(143, 209, 102, 0.22);
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.tool-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.4);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+/* --- Toasts --- */
+.hud-toasts {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.hud-toast {
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 12.5px;
+  box-shadow: var(--panel-shadow);
+  animation: toast-in 0.25s ease;
+}
+.hud-toast.fade-out {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* --- First-run help --- */
+.hud-help {
+  position: absolute;
+  bottom: 92px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(360px, 84vw);
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--panel-shadow);
+  padding: 14px 16px;
+  text-align: center;
+}
+.hud-help-text {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.hud-help-dismiss {
+  background: var(--accent);
+  color: #10240f;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 18px;
+  font-weight: 700;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* --- Responsive --- */
+@media (max-width: 700px) {
+  .hud-stats {
+    width: 168px;
+    font-size: 11.5px;
+    padding: 8px 10px;
+  }
+  .hud-colonies {
+    top: 200px;
+    width: 168px;
+    max-height: 24vh;
+  }
+  .hud-settings {
+    width: 88vw;
+    right: -4px;
+  }
+  .hud-inspector {
+    width: 84vw;
+    right: 8px;
+    bottom: 100px;
+  }
+  .tool-btn {
+    width: 38px;
+    height: 38px;
+    font-size: 16px;
+  }
+}
