@@ -12,6 +12,9 @@ You pick a **processing power** tier (phone up to server-grade workstation)
 and the simulation scales its population caps, world size, pheromone
 resolution, and visual effects to match.
 
+**Live demo:** https://website-and-game-maker.github.io/ant-simulator/
+(deploys automatically from `main` via [GitHub Actions](.github/workflows/deploy.yml))
+
 <!-- TODO: drop a screenshot or GIF of the running sim here -->
 
 ## Quick start
