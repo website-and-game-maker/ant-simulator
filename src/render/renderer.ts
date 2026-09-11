@@ -20,6 +20,31 @@ interface DustMote {
   twinklePhase: number;
 }
 
+/** Something the pointer is over. Picking is done in *screen* space so the
+ * hit area stays a constant, comfortable number of pixels no matter how far
+ * the camera is zoomed out — hunting for a 1px ant with a 1px cursor was the
+ * reason clicking felt unreliable. */
+export interface PickResult {
+  kind: 'ant' | 'colony';
+  id: number;
+  pos: Vec2;
+}
+
+const ANT_PICK_RADIUS_PX = 14;
+const NEST_PICK_RADIUS_PX = 24;
+
+const TASK_BLURB: Record<AntSnapshot['task'], string> = {
+  exploring: 'searching for food',
+  trailFollowing: 'following a scent trail',
+  returningEmpty: 'heading home',
+  returningWithFood: 'carrying food home',
+  patrolling: 'guarding the nest',
+  engaging: 'fighting',
+  fleeing: 'fleeing',
+  nuptialFlight: 'on its nuptial flight',
+  foundingSolo: 'founding a colony',
+};
+
 const TASK_TINT: Partial<Record<AntSnapshot['task'], string>> = {
   engaging: '#ff5252',
   fleeing: '#ffd54a',
@@ -49,6 +74,20 @@ export class Renderer {
   private lightningFlash = 0;
   private clock = 0;
   private lastDt = 1 / 60;
+
+  /** Last snapshot handed to render(), kept so pointer picking can hit-test
+   * against exactly what the player is looking at. */
+  private lastSnapshot: WorldSnapshot | null = null;
+  /** Pointer position in CSS pixels, or null when the pointer left the canvas. */
+  private hoverScreen: Vec2 | null = null;
+  /** What the pointer is currently over, recomputed each frame. */
+  private hovered: PickResult | null = null;
+  /** 0..1 fade so the minimap doesn't pop in and out at the threshold. */
+  private minimapFade = 0;
+  /** Tiny offscreen canvas (one pixel per pheromone cell) used to build the
+   * smooth trail glow; reallocated only when the grid size changes. */
+  private trailLayer: HTMLCanvasElement | null = null;
+  private trailLayerCtx: CanvasRenderingContext2D | null = null;
 
   constructor(
     private worldCanvas: HTMLCanvasElement,
@@ -87,11 +126,79 @@ export class Renderer {
     return this.camera.worldToScreen(p, this.cssW, this.cssH);
   }
 
+  /** Called on pointer move. Pass null when the pointer leaves the canvas. */
+  setHoverScreen(p: Vec2 | null) {
+    this.hoverScreen = p;
+  }
+
+  getHovered(): PickResult | null {
+    return this.hovered;
+  }
+
+  /**
+   * Hit-test the last rendered frame at a screen position. Ants win over
+   * nests (they sit on top), and both use a generous constant pixel radius
+   * so a click doesn't demand pixel-perfect aim at low zoom.
+   */
+  pickAt(screenPos: Vec2): PickResult | null {
+    const snap = this.lastSnapshot;
+    if (!snap) return null;
+
+    let best: PickResult | null = null;
+    let bestD2 = ANT_PICK_RADIUS_PX * ANT_PICK_RADIUS_PX;
+    for (const a of snap.ants) {
+      const s = this.w2s(a.pos);
+      const dx = s.x - screenPos.x;
+      const dy = s.y - screenPos.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = { kind: 'ant', id: a.id, pos: a.pos };
+      }
+    }
+    if (best) return best;
+
+    bestD2 = NEST_PICK_RADIUS_PX * NEST_PICK_RADIUS_PX;
+    for (const c of snap.colonies) {
+      const s = this.w2s(c.nestPos);
+      const dx = s.x - screenPos.x;
+      const dy = s.y - screenPos.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = { kind: 'colony', id: c.id, pos: c.nestPos };
+      }
+    }
+    return best;
+  }
+
+  /** True when the whole world already fits on screen, in which case a
+   * minimap is redundant clutter. */
+  private worldFitsOnScreen(snapshot: WorldSnapshot): boolean {
+    const rect = this.camera.visibleWorldRect(this.cssW, this.cssH, 0);
+    const coverX = (rect.maxX - rect.minX) / snapshot.width;
+    const coverY = (rect.maxY - rect.minY) / snapshot.height;
+    return coverX > 0.9 && coverY > 0.9;
+  }
+
   render(snapshot: WorldSnapshot, dtSeconds: number) {
     this.clock += dtSeconds;
     this.lastDt = dtSeconds;
+    this.lastSnapshot = snapshot;
     const profile = this.sim.getProfile();
     const view = this.sim.getView();
+
+    // Re-pick under the cursor every frame: entities move, so a hover that
+    // was computed only on pointermove would lag behind or stick.
+    this.hovered = view === 'surface' && this.hoverScreen ? this.pickAt(this.hoverScreen) : null;
+
+    // The minimap only earns its space once you're zoomed in far enough that
+    // the world no longer fits on screen. Fade rather than pop.
+    const wantMinimap = view === 'surface' && !this.worldFitsOnScreen(snapshot);
+    const fadeStep = dtSeconds * 4;
+    this.minimapFade = wantMinimap
+      ? Math.min(1, this.minimapFade + fadeStep)
+      : Math.max(0, this.minimapFade - fadeStep);
 
     this.camera.clampToWorld(snapshot.width, snapshot.height, this.cssW, this.cssH);
 
@@ -109,7 +216,72 @@ export class Renderer {
 
     this.renderWeatherFx(snapshot, dtSeconds, profile.render.weatherParticles, profile.render.maxParticles);
     this.renderLighting(snapshot);
-    this.renderMinimap(snapshot);
+    this.drawHoverHighlight();
+    if (this.minimapFade > 0.01) this.renderMinimap(snapshot, this.minimapFade);
+  }
+
+  /** A ring around whatever the pointer is over, so it's obvious what a click
+   * will select before you commit to it. Drawn on the FX canvas so it sits
+   * above the day/night tint rather than getting dimmed by it. */
+  private drawHoverHighlight() {
+    const hit = this.hovered;
+    if (!hit) return;
+    const ctx = this.fctx;
+    const s = this.w2s(hit.pos);
+    const pulse = 1 + Math.sin(this.clock * 4) * 0.08;
+    const r = (hit.kind === 'ant' ? 11 : 20) * pulse;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 236, 140, 0.95)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r + 1.5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Say what it is and what it's doing, right there under the cursor —
+    // you shouldn't have to click and read a side panel to find out that the
+    // dot you're looking at is a hungry worker carrying a seed home.
+    const label = this.hoverLabel(hit);
+    if (label) {
+      ctx.font = '12px system-ui, sans-serif';
+      const w = ctx.measureText(label).width;
+      const bx = Math.min(Math.max(4, s.x - w / 2 - 7), this.cssW - w - 18);
+      const by = s.y + r + 8;
+      ctx.fillStyle = 'rgba(10, 16, 12, 0.86)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, w + 14, 20, 6);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#eaf3ea';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, bx + 7, by + 10);
+      ctx.textBaseline = 'alphabetic';
+    }
+    ctx.restore();
+  }
+
+  private hoverLabel(hit: PickResult): string | null {
+    const snap = this.lastSnapshot;
+    if (!snap) return null;
+    if (hit.kind === 'ant') {
+      const a = snap.ants.find((x) => x.id === hit.id);
+      if (!a) return null;
+      const hunger = a.energy < 25 ? 'starving' : a.energy < 55 ? 'hungry' : 'fed';
+      const caste = a.caste === 'alateQueen' ? 'young queen' : a.caste;
+      return `${caste} · ${TASK_BLURB[a.task]} · ${hunger}`;
+    }
+    const c = snap.colonies.find((x) => x.id === hit.id);
+    if (!c) return null;
+    const queen = c.queenAlive ? 'queen alive' : 'no queen';
+    return `${c.name} · ${c.population} ants · ${Math.round(c.foodStore)} food · ${queen}`;
   }
 
   // -------------------------------------------------------------------
@@ -143,10 +315,7 @@ export class Renderer {
     });
 
     if (profile.render.pheromoneGlow) {
-      ctx.globalCompositeOperation = 'lighter';
-      for (const cell of snapshot.pheromone.food) this.drawPheromoneCell(cell, '120');
-      for (const cell of snapshot.pheromone.alarm) this.drawPheromoneCell(cell, '0');
-      ctx.globalCompositeOperation = 'source-over';
+      this.drawPheromoneLayer(snapshot);
     }
 
     for (const f of snapshot.foods) this.drawFood(f.pos, f.radius, f.type, f.amount / f.maxAmount);
@@ -167,13 +336,63 @@ export class Renderer {
     }
   }
 
-  private drawPheromoneCell(cell: { x: number; y: number; size: number; strength: number; colonyId: number }, hueOverride: string) {
+  /**
+   * Scent trails, drawn as a smooth glowing layer rather than a grid of hard
+   * squares. Each pheromone cell is painted as a single pixel into a tiny
+   * offscreen canvas, which is then blitted up to world scale with smoothing
+   * on — so one drawImage produces soft, continuous trails no matter how many
+   * cells are active, and the grid never shows through.
+   *
+   * Food trails glow in the depositing colony's own colour (so you can see
+   * which colony a highway belongs to); alarm pheromone is always angry red,
+   * because "my colony is under attack" should never be mistaken for
+   * "there's food this way".
+   */
+  private drawPheromoneLayer(snapshot: WorldSnapshot) {
+    const foodCells = snapshot.pheromone.food;
+    const alarmCells = snapshot.pheromone.alarm;
+    if (foodCells.length === 0 && alarmCells.length === 0) return;
+
+    const cellSize = (foodCells[0] ?? alarmCells[0]).size;
+    const cols = Math.max(1, Math.ceil(snapshot.width / cellSize));
+    const rows = Math.max(1, Math.ceil(snapshot.height / cellSize));
+
+    let layer = this.trailLayer;
+    if (!layer || layer.width !== cols || layer.height !== rows) {
+      layer = document.createElement('canvas');
+      layer.width = cols;
+      layer.height = rows;
+      this.trailLayer = layer;
+      this.trailLayerCtx = layer.getContext('2d');
+    }
+    const lctx = this.trailLayerCtx;
+    if (!lctx) return;
+
+    // Match each trail to its colony's actual colour, so a glowing highway
+    // visibly belongs to the nest it leads back to.
+    const hueByColony = new Map<number, number>();
+    for (const c of snapshot.colonies) hueByColony.set(c.id, c.colorHue);
+
+    lctx.clearRect(0, 0, cols, rows);
+    for (const cell of foodCells) {
+      const hue = hueByColony.get(cell.colonyId) ?? 95;
+      lctx.fillStyle = `hsla(${hue}, 95%, 62%, ${Math.min(1, 0.25 + cell.strength * 1.1)})`;
+      lctx.fillRect(Math.floor(cell.x / cellSize), Math.floor(cell.y / cellSize), 1, 1);
+    }
+    for (const cell of alarmCells) {
+      lctx.fillStyle = `rgba(255, 70, 60, ${Math.min(1, 0.3 + cell.strength * 1.2)})`;
+      lctx.fillRect(Math.floor(cell.x / cellSize), Math.floor(cell.y / cellSize), 1, 1);
+    }
+
     const ctx = this.wctx;
-    const p1 = this.w2s({ x: cell.x, y: cell.y });
-    const size = cell.size * this.camera.zoom;
-    const hue = cell.colonyId >= 0 ? (cell.colonyId * 47) % 360 : hueOverride;
-    ctx.fillStyle = `hsla(${hue}, 90%, 60%, ${cell.strength * 0.35})`;
-    ctx.fillRect(p1.x, p1.y, size + 1, size + 1);
+    const topLeft = this.w2s({ x: 0, y: 0 });
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.85;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(layer, topLeft.x, topLeft.y, snapshot.width * this.camera.zoom, snapshot.height * this.camera.zoom);
+    ctx.restore();
   }
 
   private drawFood(pos: Vec2, radius: number, type: string, frac: number) {
@@ -200,29 +419,99 @@ export class Renderer {
     const ctx = this.wctx;
     const s = this.w2s(c.nestPos);
     const zoom = this.camera.zoom;
-    const territoryR = c.territoryRadius * zoom;
 
-    ctx.strokeStyle = `hsla(${c.colorHue}, 70%, 60%, 0.18)`;
+    // Faint territory boundary — soldiers patrol out to roughly here.
+    ctx.strokeStyle = `hsla(${c.colorHue}, 70%, 60%, 0.13)`;
     ctx.lineWidth = 1;
+    ctx.setLineDash([4, 6]);
     ctx.beginPath();
-    ctx.arc(s.x, s.y, territoryR, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y, c.territoryRadius * zoom, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // A real nest is a crater of excavated soil with a dark hole in the
+    // middle, not a flat disc. Mound grows with the colony.
+    const moundR = Math.max(7, 12 + Math.sqrt(Math.max(0, c.population)) * 1.7) * zoom;
+    if (moundR < 1.5) {
+      // Too far away to draw detail — a single colour-coded dot still tells
+      // you a colony lives here.
+      ctx.fillStyle = `hsl(${c.colorHue}, 70%, 55%)`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    // Irregular rim, deterministic per colony so it doesn't shimmer.
+    const wobble = (i: number) => 1 + Math.sin(c.id * 12.9898 + i * 2.37) * 0.09;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+
+    // Excavated soil ring.
+    const soil = ctx.createRadialGradient(0, 0, moundR * 0.35, 0, 0, moundR);
+    soil.addColorStop(0, 'rgba(120, 86, 56, 0.95)');
+    soil.addColorStop(0.72, 'rgba(146, 108, 70, 0.95)');
+    soil.addColorStop(1, 'rgba(120, 88, 58, 0)');
+    ctx.fillStyle = soil;
+    ctx.beginPath();
+    for (let i = 0; i <= 18; i++) {
+      const a = (i / 18) * Math.PI * 2;
+      const r = moundR * wobble(i);
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r * 0.88;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // Sunlit rim on the upper edge, shadowed lower edge — gives it volume.
+    ctx.strokeStyle = 'rgba(186, 146, 100, 0.5)';
+    ctx.lineWidth = Math.max(1, moundR * 0.1);
+    ctx.beginPath();
+    ctx.arc(0, 0, moundR * 0.8, Math.PI * 1.05, Math.PI * 1.95);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(40, 26, 14, 0.35)';
+    ctx.beginPath();
+    ctx.arc(0, 0, moundR * 0.82, Math.PI * 0.08, Math.PI * 0.92);
     ctx.stroke();
 
-    const moundR = Math.max(6, 10 + Math.sqrt(c.population) * 1.4) * zoom;
-    const grad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, moundR);
-    grad.addColorStop(0, `hsl(${c.colorHue}, 40%, 32%)`);
-    grad.addColorStop(1, `hsl(${c.colorHue}, 40%, 16%)`);
-    ctx.fillStyle = grad;
+    // The entrance itself: a dark hole the ants stream in and out of.
+    const holeR = moundR * 0.34;
+    const hole = ctx.createRadialGradient(0, 0, 0, 0, 0, holeR);
+    hole.addColorStop(0, '#0a0705');
+    hole.addColorStop(0.75, '#160f09');
+    hole.addColorStop(1, 'rgba(30, 20, 12, 0.85)');
+    ctx.fillStyle = hole;
     ctx.beginPath();
-    ctx.arc(s.x, s.y, moundR, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, holeR, holeR * 0.86, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = c.alive ? `hsl(${c.colorHue}, 80%, 65%)` : '#555';
-    ctx.lineWidth = 2;
+
+    // Scattered spoil grains around the rim.
+    if (moundR > 14) {
+      ctx.fillStyle = 'rgba(160, 122, 80, 0.7)';
+      for (let i = 0; i < 7; i++) {
+        const a = c.id * 0.7 + i * 0.9;
+        const r = moundR * (1.05 + ((i * 37) % 11) / 40);
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * r, Math.sin(a) * r * 0.88, Math.max(0.6, moundR * 0.045), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Colony identity ring — thin, so it marks ownership without turning the
+    // nest into a coloured blob.
+    ctx.strokeStyle = c.alive ? `hsla(${c.colorHue}, 85%, 62%, 0.9)` : 'rgba(120,120,120,0.7)';
+    ctx.lineWidth = Math.max(1, moundR * 0.06);
+    ctx.beginPath();
+    ctx.arc(0, 0, moundR * 1.02, 0, Math.PI * 2);
     ctx.stroke();
+
+    ctx.restore();
 
     if (!c.queenAlive && c.alive) {
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.font = `${Math.max(10, moundR)}px sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.font = `${Math.max(10, moundR * 0.9)}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.fillText('☠', s.x, s.y + moundR * 0.35);
     }
@@ -585,8 +874,10 @@ export class Renderer {
     ctx.fillRect(0, 0, this.cssW, this.cssH);
   }
 
-  private renderMinimap(snapshot: WorldSnapshot) {
+  private renderMinimap(snapshot: WorldSnapshot, alpha: number) {
     const ctx = this.fctx;
+    ctx.save();
+    ctx.globalAlpha = alpha;
     const mapW = 150;
     const mapH = (snapshot.height / snapshot.width) * mapW;
     const pad = 14;
@@ -621,6 +912,7 @@ export class Renderer {
       (rect.maxX - rect.minX) * sx,
       (rect.maxY - rect.minY) * sy,
     );
+    ctx.restore();
   }
 }
 

@@ -11,16 +11,35 @@ const bootScreen = document.getElementById('boot-screen') as HTMLElement;
 
 const sim = new Simulation();
 const renderer = new Renderer(worldCanvas, fxCanvas, sim);
-renderer.fitWorldView();
+
+/** Zoom level that makes individual ants clearly readable as ants. */
+const COLONY_VIEW_ZOOM = 2.2;
+
+/**
+ * Open looking at a living colony instead of the whole world. Framing the
+ * entire map put every ant below a pixel, so the sim looked like an empty
+ * field — you had to hunt to find anything alive.
+ */
+function frameALivingColony() {
+  renderer.resize();
+  const colonies = sim.getSnapshot().colonies.filter((c) => c.alive);
+  if (colonies.length === 0) {
+    renderer.fitWorldView();
+    return;
+  }
+  const biggest = colonies.reduce((a, b) => (b.population > a.population ? b : a));
+  renderer.camera.focusOn(biggest.nestPos, COLONY_VIEW_ZOOM);
+}
+
+frameALivingColony();
 
 const hud = new HUD(uiRoot, sim, {
   onFocusPosition: (pos: Vec2) => renderer.camera.focusOn(pos, Math.max(renderer.camera.zoom, 0.7)),
   onWorldReset: () => {
     // A tier switch or restart just regenerated the world (new dimensions,
-    // maybe a new DPR cap) — re-apply both rather than leaving the camera
-    // framed on the old world.
-    renderer.resize();
-    renderer.fitWorldView();
+    // maybe a new DPR cap) — re-apply both, and land the camera on a colony
+    // so the player is looking at something alive.
+    frameALivingColony();
   },
 });
 
@@ -67,8 +86,12 @@ worldCanvas.addEventListener('pointerdown', (e) => {
 });
 
 worldCanvas.addEventListener('pointermove', (e) => {
+  const hoverPoint = canvasPoint(e);
+  renderer.setHoverScreen(hoverPoint);
+  worldCanvas.style.cursor = renderer.getHovered() ? 'pointer' : 'default';
+
   if (!activePointers.has(e.pointerId)) return;
-  const p = canvasPoint(e);
+  const p = hoverPoint;
   activePointers.set(e.pointerId, p);
 
   if (activePointers.size >= 2) {
@@ -113,6 +136,11 @@ function endPointer(e: PointerEvent) {
   }
 }
 
+worldCanvas.addEventListener('pointerleave', () => {
+  renderer.setHoverScreen(null);
+  worldCanvas.style.cursor = 'default';
+});
+
 worldCanvas.addEventListener('pointerup', endPointer);
 worldCanvas.addEventListener('pointercancel', endPointer);
 
@@ -130,9 +158,16 @@ worldCanvas.addEventListener(
 function handleTap(screenPos: Vec2) {
   const worldPos = renderer.screenToWorld(screenPos);
   switch (hud.getActiveTool()) {
-    case 'inspect':
-      sim.selectAt(worldPos);
+    case 'inspect': {
+      // Hit-test in screen space first: at low zoom an ant is a couple of
+      // pixels wide, and asking the player to land a click inside a world-space
+      // radius that small is why selection felt unreliable. If the pick finds
+      // something, hand the sim that entity's exact position so it always
+      // resolves to the thing under the cursor.
+      const hit = renderer.pickAt(screenPos);
+      sim.selectAt(hit ? hit.pos : worldPos);
       break;
+    }
     case 'placeFood':
       sim.placeFoodAt(worldPos);
       break;
