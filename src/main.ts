@@ -1,6 +1,7 @@
 import './style.css';
 import { Simulation } from './sim/simulation';
-import { Renderer } from './render/renderer';
+import { Renderer, type ScreenRect } from './render/renderer';
+import { preloadSprites } from './render/sprites';
 import { HUD } from './ui/hud';
 import type { Vec2 } from './sim/vec2';
 
@@ -11,16 +12,38 @@ const bootScreen = document.getElementById('boot-screen') as HTMLElement;
 
 const sim = new Simulation();
 const renderer = new Renderer(worldCanvas, fxCanvas, sim);
-renderer.fitWorldView();
+// Warm the ant sprite atlas so the first frames aren't rasterising bodies
+// mid-loop. Nothing is fetched over the network, so there is nothing to await.
+void preloadSprites();
+
+/** Zoom level that makes individual ants clearly readable as ants. */
+const COLONY_VIEW_ZOOM = 2.2;
+
+/**
+ * Open looking at a living colony instead of the whole world. Framing the
+ * entire map put every ant below a pixel, so the sim looked like an empty
+ * field — you had to hunt to find anything alive.
+ */
+function frameALivingColony() {
+  renderer.resize();
+  const colonies = sim.getSnapshot().colonies.filter((c) => c.alive);
+  if (colonies.length === 0) {
+    renderer.fitWorldView();
+    return;
+  }
+  const biggest = colonies.reduce((a, b) => (b.population > a.population ? b : a));
+  renderer.camera.focusOn(biggest.nestPos, COLONY_VIEW_ZOOM);
+}
+
+frameALivingColony();
 
 const hud = new HUD(uiRoot, sim, {
   onFocusPosition: (pos: Vec2) => renderer.camera.focusOn(pos, Math.max(renderer.camera.zoom, 0.7)),
   onWorldReset: () => {
     // A tier switch or restart just regenerated the world (new dimensions,
-    // maybe a new DPR cap) — re-apply both rather than leaving the camera
-    // framed on the old world.
-    renderer.resize();
-    renderer.fitWorldView();
+    // maybe a new DPR cap) — re-apply both, and land the camera on a colony
+    // so the player is looking at something alive.
+    frameALivingColony();
   },
 });
 
@@ -67,8 +90,12 @@ worldCanvas.addEventListener('pointerdown', (e) => {
 });
 
 worldCanvas.addEventListener('pointermove', (e) => {
+  const hoverPoint = canvasPoint(e);
+  renderer.setHoverScreen(hoverPoint);
+  worldCanvas.style.cursor = renderer.getHovered() ? 'pointer' : 'default';
+
   if (!activePointers.has(e.pointerId)) return;
-  const p = canvasPoint(e);
+  const p = hoverPoint;
   activePointers.set(e.pointerId, p);
 
   if (activePointers.size >= 2) {
@@ -113,6 +140,11 @@ function endPointer(e: PointerEvent) {
   }
 }
 
+worldCanvas.addEventListener('pointerleave', () => {
+  renderer.setHoverScreen(null);
+  worldCanvas.style.cursor = 'default';
+});
+
 worldCanvas.addEventListener('pointerup', endPointer);
 worldCanvas.addEventListener('pointercancel', endPointer);
 
@@ -130,9 +162,16 @@ worldCanvas.addEventListener(
 function handleTap(screenPos: Vec2) {
   const worldPos = renderer.screenToWorld(screenPos);
   switch (hud.getActiveTool()) {
-    case 'inspect':
-      sim.selectAt(worldPos);
+    case 'inspect': {
+      // Hit-test in screen space first: at low zoom an ant is a couple of
+      // pixels wide, and asking the player to land a click inside a world-space
+      // radius that small is why selection felt unreliable. If the pick finds
+      // something, hand the sim that entity's exact position so it always
+      // resolves to the thing under the cursor.
+      const hit = renderer.pickAt(screenPos);
+      sim.selectAt(hit ? hit.pos : worldPos);
       break;
+    }
     case 'placeFood':
       sim.placeFoodAt(worldPos);
       break;
@@ -153,10 +192,39 @@ window.addEventListener('resize', () => renderer.resize());
 
 let lastFrame = performance.now();
 
+/**
+ * Report where the HUD currently is, so the canvas-drawn minimap can pick a
+ * free corner instead of ending up underneath a panel.
+ *
+ * Read from the live DOM rather than from a hardcoded list of panel positions,
+ * so it stays correct as panels open, close, grow with their content, or move
+ * at a different viewport width. Throttled because `getBoundingClientRect`
+ * forces layout and panels don't move sixty times a second.
+ */
+const RESERVED_RECT_INTERVAL = 0.2; // seconds
+let reservedRectTimer = 0;
+
+function syncReservedRects() {
+  const rects: ScreenRect[] = [];
+  const selector = '.hud-panel, .hud-toolbar-wrap, .hud-topright, .hud-settings-wrap';
+  for (const el of Array.from(uiRoot.querySelectorAll<HTMLElement>(selector))) {
+    if (el.classList.contains('hidden') || el.offsetParent === null) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) rects.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+  }
+  renderer.setReservedRects(rects);
+}
+
 function frame(now: number) {
   const dtRaw = (now - lastFrame) / 1000;
   lastFrame = now;
   const dt = Math.min(dtRaw, 0.25); // guard against huge jumps (tab backgrounded, etc.)
+
+  reservedRectTimer -= dt;
+  if (reservedRectTimer <= 0) {
+    reservedRectTimer = RESERVED_RECT_INTERVAL;
+    syncReservedRects();
+  }
 
   sim.update(dt);
   const snapshot = sim.getSnapshot();

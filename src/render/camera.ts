@@ -18,11 +18,21 @@ export class Camera {
     this.zoom = 1;
   }
 
+  /**
+   * The most zoomed-out useful setting: the whole world visible at once.
+   *
+   * `minZoom` is a fixed 0.12, which for a typical world let you keep scrolling
+   * out long after the last of it was on screen, until the map was a postage
+   * stamp adrift in black. Past the fit point there is nothing further to
+   * reveal, so that is where zooming out stops.
+   */
+  fitZoom(worldWidth: number, worldHeight: number, viewportW: number, viewportH: number): number {
+    return Math.max(this.minZoom, Math.min(viewportW / worldWidth, viewportH / worldHeight));
+  }
+
   /** Fit (roughly) the whole world into a viewport of the given size. */
   fitWorld(worldWidth: number, worldHeight: number, viewportW: number, viewportH: number) {
-    const zx = viewportW / worldWidth;
-    const zy = viewportH / worldHeight;
-    this.zoom = clamp(Math.min(zx, zy) * 0.94, this.minZoom, this.maxZoom);
+    this.zoom = clamp(this.fitZoom(worldWidth, worldHeight, viewportW, viewportH), this.minZoom, this.maxZoom);
     this.x = worldWidth / 2;
     this.y = worldHeight / 2;
   }
@@ -60,16 +70,25 @@ export class Camera {
     if (zoom !== undefined) this.zoom = clamp(zoom, this.minZoom, this.maxZoom);
   }
 
-  /** Keep the camera from wandering so far that the world drifts entirely out
-   * of view. The allowed margin shrinks as you zoom in (in world units) so
-   * it stays a roughly constant, modest sliver in screen space. */
+  /**
+   * Keep the viewport inside the world.
+   *
+   * This used to allow the camera centre to travel a margin *past* the world
+   * edge, which meant you could pan until a third of the screen was empty
+   * black nothing below the ground — the world looked like it had fallen off
+   * a table. Now the rule is the ordinary one: if the world is wider than the
+   * viewport, the camera centre stays at least half a viewport in from each
+   * edge, so the ground always fills the screen; if the world is *narrower*
+   * than the viewport (fully zoomed out), it is centred instead.
+   */
   clampToWorld(worldWidth: number, worldHeight: number, viewportW: number, viewportH: number) {
+    // Enforced here rather than in `zoomAt` because it depends on the viewport
+    // size, which changes on every window resize.
+    this.zoom = Math.max(this.zoom, this.fitZoom(worldWidth, worldHeight, viewportW, viewportH));
     const halfW = viewportW / this.zoom / 2;
     const halfH = viewportH / this.zoom / 2;
-    const marginX = Math.max(0, halfW - worldWidth / 2) + halfW * 0.5;
-    const marginY = Math.max(0, halfH - worldHeight / 2) + halfH * 0.5;
-    this.x = clamp(this.x, -marginX, worldWidth + marginX);
-    this.y = clamp(this.y, -marginY, worldHeight + marginY);
+    this.x = worldWidth <= halfW * 2 ? worldWidth / 2 : clamp(this.x, halfW, worldWidth - halfW);
+    this.y = worldHeight <= halfH * 2 ? worldHeight / 2 : clamp(this.y, halfH, worldHeight - halfH);
   }
 
   /** Visible world-space rectangle, useful for culling. */

@@ -23,7 +23,12 @@ export const PERFORMANCE_PROFILES: Record<PerformanceTierName, PerformanceProfil
     maxDevicePixelRatio: 1.25,
     render: {
       antLegAnimation: false,
-      pheromoneGlow: false,
+      // Trails stay on even here. They used to be off, which meant the low
+      // tier hid the single most important thing in an ant simulator — you
+      // couldn't see the colony recruiting to food at all. The layer is now
+      // one `drawImage` of a tiny offscreen canvas per frame regardless of
+      // how many cells are active, so it costs a phone essentially nothing.
+      pheromoneGlow: true,
       softShadows: false,
       weatherParticles: false,
       ambientLighting: true,

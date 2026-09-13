@@ -26,8 +26,23 @@ import { SpatialHash } from './spatialHash';
 import { DEFAULT_SPECIES, RIVAL_HUES } from './species';
 import { inheritGenetics, randomGenetics } from './genetics';
 
-const FOOD_TRAIL_EVAPORATION = 0.6;
+/**
+ * Food-trail evaporation, in "fraction lost per second" terms (the field
+ * applies exp(-rate*dt)). This used to be 0.6/sec — a half-life of about one
+ * second, so a trail a forager laid had essentially evaporated before any
+ * nestmate could cross it. Recruitment was mathematically impossible and all
+ * the player ever saw was a faint smear behind each ant. At 0.03 a trail has a
+ * ~23-second half-life and stays legible for a minute or two: long enough to
+ * build a visible highway, short enough that routes to exhausted sources fade
+ * and the colony re-explores.
+ */
+const FOOD_TRAIL_EVAPORATION = 0.03;
 const ALARM_TRAIL_EVAPORATION = 1.4;
+/** Minimum cell strength included in the rendered pheromone snapshot. The low
+ * tier uses a higher cut so phones push fewer cells — but it still gets trails,
+ * because the trails are the whole point of watching the thing. */
+const PHEROMONE_SNAPSHOT_MIN = 4;
+const PHEROMONE_SNAPSHOT_MIN_LOW = 12;
 
 function emptyDeathCounts(): Record<DeathCause, number> {
   return { oldAge: 0, starvation: 0, combat: 0, predator: 0, drowned: 0, exposure: 0, crushed: 0 };
@@ -77,6 +92,10 @@ export class Simulation implements ISimulation {
 
   private births = 0;
   private deaths = 0;
+  /** Food/trips banked by colonies that have since collapsed, so the run
+   * totals are monotonic even as nests come and go. */
+  private retiredFoodCollected = 0;
+  private retiredForagingTrips = 0;
   private deathsByCause: Record<DeathCause, number> = emptyDeathCounts();
   private birthTimestamps: number[] = [];
   private deathTimestamps: number[] = [];
@@ -117,6 +136,8 @@ export class Simulation implements ISimulation {
     this.selectedColonyId = null;
     this.births = 0;
     this.deaths = 0;
+    this.retiredFoodCollected = 0;
+    this.retiredForagingTrips = 0;
     this.deathsByCause = emptyDeathCounts();
     this.birthTimestamps = [];
     this.deathTimestamps = [];
@@ -261,7 +282,11 @@ export class Simulation implements ISimulation {
     if (weatherChanged) this.events.emit('weatherChanged', { weather: this.weather.weather });
 
     this.terrain.regrow(dt);
-    this.terrain.maybeSpawnFood(this.rng, dt * 0.008);
+    // Keep topping the world back up toward its target food density. The old
+    // flat 0.008/sec meant one new source every two sim-minutes no matter how
+    // big the world or how picked-over it was; `maybeSpawnFood` now no-ops
+    // once the world is back at density, so this can afford to be brisk.
+    this.terrain.maybeSpawnFood(this.rng, dt * 0.6);
 
     this.antsHash.rebuild(this.ants);
     this.predatorsHash.rebuild(this.predators);
@@ -347,7 +372,16 @@ export class Simulation implements ISimulation {
     }
     this.predators = this.predators.filter((p) => p.alive);
 
-    this.colonies = this.colonies.filter((c) => c.alive || c.population > 0 || c.larvae.length > 0);
+    this.colonies = this.colonies.filter((c) => {
+      const keep = c.alive || c.population > 0 || c.larvae.length > 0;
+      if (!keep) {
+        // Keep a collapsed colony's haul in the run totals, so the HUD's
+        // "food collected" doesn't jump backwards when a nest dies out.
+        this.retiredFoodCollected += c.foodCollected;
+        this.retiredForagingTrips += c.foragingTrips;
+      }
+      return keep;
+    });
 
     if (this.predators.length < this.profile.maxPredators && chance(this.rng, dt * 0.006 * (1 + this.colonies.length * 0.15))) {
       const center = { x: this.terrain.width / 2, y: this.terrain.height / 2 };
@@ -498,6 +532,20 @@ export class Simulation implements ISimulation {
   }
 
   getSnapshot(): WorldSnapshot {
+    let antsCarrying = 0;
+    let antsHungry = 0;
+    for (const a of this.ants) {
+      if (a.carryAmount > 0) antsCarrying++;
+      if (a.isHungry()) antsHungry++;
+    }
+    let foodCollected = this.retiredFoodCollected;
+    let foragingTrips = this.retiredForagingTrips;
+    for (const c of this.colonies) {
+      foodCollected += c.foodCollected;
+      foragingTrips += c.foragingTrips;
+    }
+    const pheromoneMin = this.tier === 'low' ? PHEROMONE_SNAPSHOT_MIN_LOW : PHEROMONE_SNAPSHOT_MIN;
+
     const stats: SimStats = {
       simTime: this.simTime,
       tick: this.tick,
@@ -514,6 +562,11 @@ export class Simulation implements ISimulation {
       weather: this.weather.weather,
       fps: this.frameDtEma > 0 ? 1 / this.frameDtEma : 0,
       simMsPerFrame: this.simMsPerFrame,
+      foodCollected,
+      foragingTrips,
+      antsCarrying,
+      antsHungry,
+      foodSources: this.terrain.foods.length,
     };
 
     return {
@@ -522,9 +575,10 @@ export class Simulation implements ISimulation {
       foods: this.terrain.foods,
       obstacles: this.terrain.obstacles,
       terrainGrid: this.terrain.getGridData(),
-      pheromone: this.profile.render.pheromoneGlow
-        ? { food: this.foodTrail.snapshotCells(6), alarm: this.alarmTrail.snapshotCells(6) }
-        : { food: [], alarm: [] },
+      pheromone: {
+        food: this.foodTrail.snapshotCells(pheromoneMin),
+        alarm: this.alarmTrail.snapshotCells(pheromoneMin),
+      },
       ants: this.ants.map((a) => {
         const snap = a.toSnapshot();
         snap.selected = a.id === this.selectedAntId;
