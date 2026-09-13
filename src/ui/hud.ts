@@ -7,6 +7,7 @@ import { DEFAULT_SPECIES } from '../sim/species';
 import { DAY_LENGTH_SECONDS } from '../sim/weather';
 import { ColonyLog } from './colonyLog';
 import { Intro, hasSeenIntro } from './intro';
+import { FeedbackPanel } from './feedback';
 
 export type ToolMode = 'inspect' | 'placeFood' | 'spawnPredator' | 'foundColony';
 
@@ -228,6 +229,7 @@ export class HUD {
 
   private log!: ColonyLog;
   private intro!: Intro;
+  private feedback!: FeedbackPanel;
   /** Colony names survive here after a colony dies, so the log can still say
    * who collapsed. */
   private colonyNames = new Map<number, string>();
@@ -272,6 +274,21 @@ export class HUD {
   }
 
   /** Open the how-it-works overlay (also wired to the "?" button). */
+  /** Open the feedback panel from outside the HUD (the `f` shortcut lives on
+   * the HUD's own handler; this is for anything else that wants to invite a
+   * report, such as an error boundary). */
+  showFeedback() {
+    this.openFeedback();
+  }
+
+  /** Two modals at once is never right: reading the intro and then reaching
+   * for the feedback button is a normal thing to do, so the intro steps
+   * aside rather than trapping the click. */
+  private openFeedback() {
+    this.intro.close();
+    this.feedback.open();
+  }
+
   showIntro(pane = 0) {
     this.intro.open(pane);
   }
@@ -293,6 +310,7 @@ export class HUD {
     for (const un of this.unsubscribers) un();
     this.log?.dispose();
     this.intro?.dispose();
+    this.feedback?.dispose();
     this.root.querySelector('.hud-root')?.remove();
   }
 
@@ -317,6 +335,8 @@ export class HUD {
 
     this.intro = new Intro();
     container.appendChild(this.intro.element);
+    this.feedback = new FeedbackPanel(this.sim);
+    container.appendChild(this.feedback.element);
     if (!hasSeenIntro()) this.intro.open();
 
     this.setActiveTool('inspect');
@@ -350,6 +370,9 @@ export class HUD {
     } else if (e.key === '?') {
       e.preventDefault();
       this.intro.open();
+    } else if (e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      this.openFeedback();
     }
   };
 
@@ -620,7 +643,15 @@ export class HUD {
     help.setAttribute('aria-label', 'How it works');
     help.addEventListener('click', () => this.intro.open());
 
-    wrap.append(help, this.buildSettingsPanel());
+    // Deliberately a peer of "How it works" rather than buried in settings.
+    // Feedback nobody can find is feedback nobody sends.
+    const feedbackBtn = el('button', 'hud-icon-btn hud-feedback-btn', '💬');
+    feedbackBtn.type = 'button';
+    feedbackBtn.title = 'Send feedback — an idea, a bug, or what you thought';
+    feedbackBtn.setAttribute('aria-label', 'Send feedback');
+    feedbackBtn.addEventListener('click', () => this.openFeedback());
+
+    wrap.append(help, feedbackBtn, this.buildSettingsPanel());
     return wrap;
   }
 

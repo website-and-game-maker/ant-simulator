@@ -133,6 +133,8 @@ diagram, positioned at each nest.
 - The gear icon opens **Settings**: processing power tier, simulation speed
   (pause/1×/2×/5×/10×), and the surface/underground view toggle.
 - Click a colony in the leaderboard panel to snap the camera to its nest.
+- **`F`** (or the 💬 button) opens the feedback panel; **`?`** reopens the
+  explainer; **Space** pauses.
 
 ## Architecture
 
@@ -169,6 +171,41 @@ tests on the pure simulation logic. No backend — it's a static site.
   stylized cutaway diagram.
 - Territory-aware colony AI (deliberate raids on weaker neighbors, rather
   than only incidental combat on contact).
+
+## Feedback
+
+Press **`F`** (or the 💬 button, top right) inside the simulator to file an
+idea, a bug, or a balance complaint. The panel prefills a GitHub issue and
+attaches what the simulation was doing at that moment — crucially the **world
+seed**. Because the simulation is fully deterministic in its seed, that one
+number is enough to replay the exact run you were looking at:
+
+```ts
+const sim = new Simulation({ tier: 'medium', seed: 1873402231 });
+for (let i = 0; i < 30 * 600; i++) sim.update(1 / 30); // ten sim-minutes
+```
+
+You are shown the diagnostics before anything is sent and can decline to
+attach them. Nothing personal is collected; the report becomes a public issue.
+
+Reports are kept locally too, so a blocked popup, a login redirect or a closed
+tab never loses one — the panel's history list can retry or export them, and
+"Copy as Markdown" always produces the complete report regardless of URL
+length limits.
+
+### Reviewing what people have asked for
+
+```bash
+npm run feedback                  # ranked markdown digest
+npm run feedback -- --json        # same data, machine-readable
+npm run feedback -- --state all   # include closed reports
+```
+
+No credentials required (`GITHUB_TOKEN` is used if present, purely to raise
+the rate limit). Near-duplicate reports are clustered so five phrasings of one
+complaint read as one theme, and clusters are ranked by **distinct reporters**
+first, then 👍, then discussion — so one person filing the same idea four times
+doesn't outrank four people hitting the same wall.
 
 ## Contributing
 
