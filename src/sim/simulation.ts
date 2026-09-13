@@ -420,6 +420,10 @@ export class Simulation implements ISimulation {
   getProfile(): PerformanceProfile {
     return this.profile;
   }
+  getSeed(): number {
+    return this.seed;
+  }
+
   restart(seed?: number): void {
     this.seed = seed ?? (Date.now() >>> 0);
     this.initWorld();

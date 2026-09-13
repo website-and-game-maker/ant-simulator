@@ -1,0 +1,38 @@
+name: 💡 Idea / feature request
+description: Something you'd like Formicarium to do.
+title: "[Feature] "
+labels: ["feedback", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: [have a look at what's already been asked for](https://github.com/website-and-game-maker/ant-simulator/issues?q=is%3Aissue+label%3Afeedback+sort%3Areactions-%2B1-desc).
+        A 👍 on an existing request counts for more than a duplicate — the triage digest ranks by reactions.
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like to be able to do?
+      placeholder: I want to be able to watch a single ant's whole life, from hatching to death.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why? What would that let you see or do?
+      description: The reason matters more than the mechanism — it often points at a simpler way to get you the same thing.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the simulator?
+      options:
+        - Ant behaviour / AI
+        - Colony lifecycle (queens, brood, founding)
+        - Graphics and visuals
+        - UI, HUD, or controls
+        - Performance
+        - World, terrain, or weather
+        - Something else
+    validations:
+      required: false

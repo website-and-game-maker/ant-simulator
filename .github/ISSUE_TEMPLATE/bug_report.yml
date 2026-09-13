@@ -1,0 +1,52 @@
+name: 🐞 Bug report
+description: Something is broken, or looks wrong.
+title: "[Bug] "
+labels: ["feedback", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **The fastest way to file this is from inside the simulator** — press 💬 (or `F`).
+        It attaches the world seed, and because the simulation is fully deterministic in
+        its seed, that alone is usually enough to reproduce exactly what you saw.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      placeholder: Every ant in both colonies starved within about two minutes.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: false
+  - type: input
+    id: seed
+    attributes:
+      label: World seed
+      description: Shown in the diagnostics block the in-game feedback panel attaches.
+      placeholder: "1873402231"
+    validations:
+      required: false
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Processing power setting
+      options:
+        - Low — Phone / Tablet
+        - Medium — Laptop / Desktop
+        - High — MacBook Pro / Gaming PC
+        - Beast — Workstation / Server
+        - Not sure
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste the block from the in-game panel here, if you have it.
+      render: json
+    validations:
+      required: false

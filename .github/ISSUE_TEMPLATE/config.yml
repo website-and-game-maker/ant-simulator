@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Send feedback from inside the simulator
+    url: https://website-and-game-maker.github.io/ant-simulator/
+    about: >-
+      Easiest route: press the 💬 button (or F) in the running simulator. It
+      attaches the seed and world state, so whatever you saw can be reproduced
+      exactly.

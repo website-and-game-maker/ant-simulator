@@ -223,6 +223,7 @@ const PANES: PaneSpec[] = [
       { icon: '🖐️', text: 'Drag to pan, scroll or pinch to zoom. Click an ant to open its inspector and watch its hunger, age and errand change.' },
       { icon: '🧰', text: 'Tool bar (bottom): 🔍 inspect · 🌰 drop food · 🕷️ spawn a predator · 👑 found a rogue colony. Pick a tool, then click the ground.' },
       { icon: '⚙️', text: 'The gear holds speed (1× to 10×, or pause with Space), the surface / underground view toggle, and graphics power.' },
+      { icon: '💬', text: 'Found a bug, or want the colonies to do something they don\u2019t? The <b>\ud83d\udcac</b> button (or <b>F</b>) files it, with the world state attached so it can be reproduced.' },
     ],
     footnote: 'You can reopen this any time with the <b>?</b> button, top right.',
   },

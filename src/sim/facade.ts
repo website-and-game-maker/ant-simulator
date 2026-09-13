@@ -19,6 +19,10 @@ export interface ISimulation {
   getTier(): PerformanceTierName;
   getProfile(): PerformanceProfile;
   restart(seed?: number): void;
+  /** The RNG seed the current world was generated from. The whole simulation
+   * is deterministic in this seed, so quoting it in a bug report is enough to
+   * reproduce the exact run the reporter was looking at. */
+  getSeed(): number;
 
   setSpeed(multiplier: number): void; // 0 = paused, 1 = normal, up to ~8
   getSpeed(): number;
