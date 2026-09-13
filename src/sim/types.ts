@@ -146,6 +146,14 @@ export interface AntSnapshot {
   age: number; // seconds
   genetics: Genetics;
   selected?: boolean;
+  /** How much food this ant is physically hauling (0 when not carrying).
+   * `carrying` stays the cheap boolean the renderer needs; this is here for
+   * UI that wants to show the size of the haul. */
+  carryAmount?: number;
+  /** True when this ant's energy has dropped past the point where it breaks
+   * off foraging and heads home to be fed. Lets the UI/renderer flag hungry
+   * ants without having to know the engine's threshold. */
+  hungry?: boolean;
 }
 
 export interface LarvaSnapshot {
@@ -171,6 +179,10 @@ export interface ColonySnapshot {
   founded: number; // sim time
   alive: boolean;
   avgGenetics: Genetics | null;
+  /** Lifetime food hauled into this nest by its foragers. */
+  foodCollected?: number;
+  /** Lifetime food handed back out to hungry nestmates (trophallaxis). */
+  foodShared?: number;
 }
 
 export interface PredatorSnapshot {
@@ -199,6 +211,16 @@ export interface SimStats {
   weather: WeatherState;
   fps: number;
   simMsPerFrame: number;
+  /** Total food delivered to any nest since the run started. */
+  foodCollected?: number;
+  /** Completed forager round-trips (a delivery at the nest) since the run started. */
+  foragingTrips?: number;
+  /** How many living ants are hauling food right now. */
+  antsCarrying?: number;
+  /** How many living ants are currently hungry enough to break off and feed. */
+  antsHungry?: number;
+  /** Food sources currently on the map with anything left in them. */
+  foodSources?: number;
 }
 
 /** Live (uncopied) references to the terrain's biome/wetness grids — see

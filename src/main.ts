@@ -1,6 +1,7 @@
 import './style.css';
 import { Simulation } from './sim/simulation';
-import { Renderer } from './render/renderer';
+import { Renderer, type ScreenRect } from './render/renderer';
+import { preloadSprites } from './render/sprites';
 import { HUD } from './ui/hud';
 import type { Vec2 } from './sim/vec2';
 
@@ -11,6 +12,9 @@ const bootScreen = document.getElementById('boot-screen') as HTMLElement;
 
 const sim = new Simulation();
 const renderer = new Renderer(worldCanvas, fxCanvas, sim);
+// Warm the ant sprite atlas so the first frames aren't rasterising bodies
+// mid-loop. Nothing is fetched over the network, so there is nothing to await.
+void preloadSprites();
 
 /** Zoom level that makes individual ants clearly readable as ants. */
 const COLONY_VIEW_ZOOM = 2.2;
@@ -188,10 +192,39 @@ window.addEventListener('resize', () => renderer.resize());
 
 let lastFrame = performance.now();
 
+/**
+ * Report where the HUD currently is, so the canvas-drawn minimap can pick a
+ * free corner instead of ending up underneath a panel.
+ *
+ * Read from the live DOM rather than from a hardcoded list of panel positions,
+ * so it stays correct as panels open, close, grow with their content, or move
+ * at a different viewport width. Throttled because `getBoundingClientRect`
+ * forces layout and panels don't move sixty times a second.
+ */
+const RESERVED_RECT_INTERVAL = 0.2; // seconds
+let reservedRectTimer = 0;
+
+function syncReservedRects() {
+  const rects: ScreenRect[] = [];
+  const selector = '.hud-panel, .hud-toolbar-wrap, .hud-topright, .hud-settings-wrap';
+  for (const el of Array.from(uiRoot.querySelectorAll<HTMLElement>(selector))) {
+    if (el.classList.contains('hidden') || el.offsetParent === null) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) rects.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+  }
+  renderer.setReservedRects(rects);
+}
+
 function frame(now: number) {
   const dtRaw = (now - lastFrame) / 1000;
   lastFrame = now;
   const dt = Math.min(dtRaw, 0.25); // guard against huge jumps (tab backgrounded, etc.)
+
+  reservedRectTimer -= dt;
+  if (reservedRectTimer <= 0) {
+    reservedRectTimer = RESERVED_RECT_INTERVAL;
+    syncReservedRects();
+  }
 
   sim.update(dt);
   const snapshot = sim.getSnapshot();

@@ -1,7 +1,10 @@
 import type { WeatherState } from './types';
 import { chance, clamp, type RNG } from './rng';
 
-const DAY_LENGTH_SECONDS = 150; // one full day/night cycle, in sim-seconds
+/** One full day/night cycle, in sim-seconds. Exported because the HUD needs it
+ * to turn `simTime` into a day number, and a second hardcoded copy over there
+ * drifted out of phase with this one. */
+export const DAY_LENGTH_SECONDS = 150;
 
 /**
  * Day/night cycle and weather state machine. Both feed back into the sim:
@@ -9,7 +12,12 @@ const DAY_LENGTH_SECONDS = 150; // one full day/night cycle, in sim-seconds
  * fills puddles (a drowning hazard) and washes pheromone trails out faster.
  */
 export class WeatherSystem {
-  private clock = 0; // 0..DAY_LENGTH_SECONDS, wraps
+  /** 0..DAY_LENGTH_SECONDS, wraps. Starts at midday, not midnight: the clock
+   * used to start at 0, so a fresh load opened on a scene buried under a
+   * near-full-strength night overlay and you couldn't make out the ants or the
+   * ground at all. Night still comes — it just isn't the first thing anyone
+   * sees. Midday is also peak `activityMultiplier`, so the colony opens busy. */
+  private clock = DAY_LENGTH_SECONDS * 0.5;
   weather: WeatherState = 'clear';
   private weatherTimer: number;
   rainIntensity = 0;

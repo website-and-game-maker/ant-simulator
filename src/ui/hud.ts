@@ -1,12 +1,16 @@
 import type { ISimulation } from '../sim/facade';
-import type { AntSnapshot, Caste, ColonySnapshot, DeathCause, WorldSnapshot } from '../sim/types';
+import type { AntSnapshot, AntTask, Caste, ColonySnapshot, DeathCause, WorldSnapshot } from '../sim/types';
 import type { Vec2 } from '../sim/vec2';
 import { PERFORMANCE_PROFILES, PERFORMANCE_TIER_ORDER } from '../sim/performanceProfiles';
 import type { PerformanceTierName } from '../sim/types';
+import { DEFAULT_SPECIES } from '../sim/species';
+import { DAY_LENGTH_SECONDS } from '../sim/weather';
+import { ColonyLog } from './colonyLog';
+import { Intro, hasSeenIntro } from './intro';
 
 export type ToolMode = 'inspect' | 'placeFood' | 'spawnPredator' | 'foundColony';
 
-const TASK_LABELS: Record<AntSnapshot['task'], string> = {
+const TASK_LABELS: Record<AntTask, string> = {
   exploring: 'Exploring for food',
   trailFollowing: 'Following a scent trail',
   returningEmpty: 'Heading home',
@@ -18,13 +22,36 @@ const TASK_LABELS: Record<AntSnapshot['task'], string> = {
   foundingSolo: 'Founding a new colony',
 };
 
+/** One plain sentence per task, so the inspector reads as a story instead of
+ * a state machine dump ("I have no idea what they were doing"). */
+const TASK_STORY: Record<AntTask, string> = {
+  exploring: 'Wandering more or less at random, hunting for anything edible. No trail to follow yet.',
+  trailFollowing: "Locked onto another ant's scent trail, betting that it leads to food.",
+  returningEmpty: 'Came up empty and is walking back to the nest to be fed.',
+  returningWithFood: 'Hauling food home, laying a scent trail behind it so nestmates can find the same spot.',
+  patrolling: 'Circling the nest on guard duty, watching for rivals and predators.',
+  engaging: 'In a fight right now — mandibles locked with an enemy.',
+  fleeing: 'Running from something bigger than it is.',
+  nuptialFlight: 'Airborne on its nuptial flight, looking for ground to start a colony of its own.',
+  foundingSolo: 'Digging in alone to found a new colony — the longest odds in the world.',
+};
+
 const CASTE_LABELS: Record<Caste, string> = {
   larva: 'Larva',
   worker: 'Worker',
   soldier: 'Soldier',
   queen: 'Queen',
   drone: 'Drone',
-  alateQueen: 'Alate queen',
+  alateQueen: 'Winged queen',
+};
+
+const CASTE_BLURB: Record<Caste, string> = {
+  larva: 'A grub in the nest, being fed until it matures.',
+  worker: 'The colony workhorse: forages, hauls, feeds the brood.',
+  soldier: 'Bigger jaws, shorter life. Guards the nest and fights rivals.',
+  queen: 'The colony mother. If she dies, no new ants are born.',
+  drone: 'A male. Lives only to join a nuptial flight.',
+  alateQueen: 'A future queen, waiting for a nuptial flight to found her own colony.',
 };
 
 const DEATH_LABELS: Record<DeathCause, string> = {
@@ -32,9 +59,19 @@ const DEATH_LABELS: Record<DeathCause, string> = {
   starvation: 'Starvation',
   combat: 'Combat',
   predator: 'Predators',
-  drowned: 'Drowned',
+  drowned: 'Drowning',
   exposure: 'Exposure',
   crushed: 'Crushed',
+};
+
+const DEATH_ICONS: Record<DeathCause, string> = {
+  oldAge: '🕯️',
+  starvation: '🍽️',
+  combat: '⚔️',
+  predator: '🕷️',
+  drowned: '💧',
+  exposure: '🥶',
+  crushed: '🪨',
 };
 
 const WEATHER_ICON: Record<string, string> = { clear: '☀️', overcast: '☁️', rain: '🌧️', storm: '⛈️' };
@@ -56,6 +93,91 @@ function fmt(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : Math.round(n).toString();
 }
 
+function clockStr(seconds: number): string {
+  const t = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(t / 60)}:${(t % 60).toString().padStart(2, '0')}`;
+}
+
+function hungerWord(energy: number): { word: string; color: string } {
+  if (energy < 25) return { word: 'Starving', color: '#e0605c' };
+  if (energy < 55) return { word: 'Hungry', color: '#e0a95c' };
+  return { word: 'Fed', color: '#7ee07e' };
+}
+
+function healthWord(health: number): { word: string; color: string } {
+  if (health < 30) return { word: 'Badly hurt', color: '#e0605c' };
+  if (health < 75) return { word: 'Hurt', color: '#e0a95c' };
+  return { word: 'Healthy', color: '#7ee07e' };
+}
+
+function lifeStage(fraction: number): string {
+  if (fraction < 0.15) return 'newly hatched';
+  if (fraction < 0.5) return 'in its prime';
+  if (fraction < 0.8) return 'getting old';
+  return 'very old';
+}
+
+/** Expected lifespan in sim-seconds for this ant, from the species baseline
+ * scaled by its own lifespan gene. Read-only use of the sim's species table. */
+function expectedLifespan(ant: AntSnapshot): number {
+  const base =
+    ant.caste === 'larva' ? DEFAULT_SPECIES.larvaMatureTicks : DEFAULT_SPECIES.baseLifespanTicks[ant.caste];
+  return Math.max(1, base * (ant.genetics.lifespan || 1));
+}
+
+interface Meter {
+  row: HTMLElement;
+  fill: HTMLElement;
+  value: HTMLElement;
+}
+
+function buildMeter(label: string): Meter {
+  const row = el('div', 'meter-row');
+  row.appendChild(el('span', 'meter-label', label));
+  const track = el('div', 'meter-track');
+  const fill = el('div', 'meter-fill');
+  track.appendChild(fill);
+  row.appendChild(track);
+  const value = el('span', 'meter-value', '');
+  row.appendChild(value);
+  return { row, fill, value };
+}
+
+function setMeter(m: Meter, value: number, max: number, color: string, text: string) {
+  const pct = `${Math.max(0, Math.min(100, (value / max) * 100)).toFixed(1)}%`;
+  if (m.fill.style.width !== pct) m.fill.style.width = pct;
+  if (m.fill.dataset.color !== color) {
+    m.fill.style.background = color;
+    m.fill.dataset.color = color;
+  }
+  if (m.value.textContent !== text) m.value.textContent = text;
+}
+
+/** Live DOM handles for one row of the colony leaderboard. Rows are created
+ * once and mutated in place — rebuilding them every tick destroyed the node
+ * under the cursor, which made hover strobe and swallowed clicks. */
+interface ColonyRowRefs {
+  root: HTMLElement;
+  dot: HTMLElement;
+  name: HTMLElement;
+  pop: HTMLElement;
+  status: HTMLElement;
+  /** Always the newest snapshot for this colony, so the click handler bound at
+   * creation time can never act on stale data. */
+  data: ColonySnapshot;
+  lastName: string;
+  lastPop: number;
+  lastStatus: string;
+  lastHue: number;
+}
+
+interface DeathRowRefs {
+  root: HTMLElement;
+  bar: HTMLElement;
+  count: HTMLElement;
+  lastCount: number;
+}
+
 interface HudOptions {
   onFocusPosition?: (pos: Vec2) => void;
   /** Called right after a tier switch or restart regenerates the world —
@@ -66,8 +188,13 @@ interface HudOptions {
 
 /**
  * The whole HUD: settings, live stats, colony leaderboard, ant/colony
- * inspector, tool bar, toast feed, first-run help. Plain DOM, no framework —
- * see the CSS appended to src/style.css under "UI PANEL STYLES".
+ * inspector, tool bar, colony log, and the how-it-works intro. Plain DOM, no
+ * framework — see the CSS appended to src/style.css under "UI PANEL STYLES".
+ *
+ * Two rules keep this thing from fighting the 60fps loop:
+ *  1. nothing that the pointer can touch is ever rebuilt from scratch while
+ *     it is on screen — rows, meters and log lines are reconciled in place;
+ *  2. heavy text writes are throttled to ~7.5Hz (see `update`).
  */
 export class HUD {
   private root: HTMLElement;
@@ -80,18 +207,52 @@ export class HUD {
 
   // DOM refs
   private statsEls: Record<string, HTMLElement> = {};
+  private deathListEl!: HTMLElement;
+  private deathTotalEl!: HTMLElement;
+  private deathRows = new Map<DeathCause, DeathRowRefs>();
   private colonyListEl!: HTMLElement;
+  private colonyEmptyEl!: HTMLElement;
+  private colonyRows = new Map<number, ColonyRowRefs>();
+  private focusedColonyId: number | null = null;
+  private colonyListHot = false;
   private inspectorEl!: HTMLElement;
   private toolButtons = {} as Record<ToolMode, HTMLButtonElement>;
   private toolHintEl!: HTMLElement;
-  private toastContainer!: HTMLElement;
-  private toastQueue: { text: string; icon: string }[] = [];
-  private toastShowing = false;
+  private toolHintTimer = 0;
   private settingsPanelEl!: HTMLElement;
+  private settingsWrapEl!: HTMLElement;
   private restartBtn!: HTMLButtonElement;
   private confirmingRestart = false;
   private speedButtons: HTMLButtonElement[] = [];
   private unsubscribers: (() => void)[] = [];
+
+  private log!: ColonyLog;
+  private intro!: Intro;
+  /** Colony names survive here after a colony dies, so the log can still say
+   * who collapsed. */
+  private colonyNames = new Map<number, string>();
+
+  // Inspector state (built once, reconciled every frame)
+  private insp!: {
+    antView: HTMLElement;
+    colonyView: HTMLElement;
+    caste: HTMLElement;
+    casteBlurb: HTMLElement;
+    antColonyDot: HTMLElement;
+    antColonyName: HTMLElement;
+    task: HTMLElement;
+    story: HTMLElement;
+    carrying: HTMLElement;
+    energy: Meter;
+    health: Meter;
+    life: Meter;
+    lifeNote: HTMLElement;
+    genetics: Record<string, Meter>;
+    colonyName: HTMLElement;
+    colonyStatus: HTMLElement;
+    colonyFacts: HTMLElement;
+    colonyCastes: HTMLElement;
+  };
 
   constructor(root: HTMLElement, sim: ISimulation, opts: HudOptions = {}) {
     this.root = root;
@@ -107,13 +268,20 @@ export class HUD {
   setActiveTool(tool: ToolMode) {
     this.activeTool = tool;
     for (const [key, btn] of Object.entries(this.toolButtons)) btn.classList.toggle('active', key === tool);
-    this.toolHintEl.textContent = TOOL_HINTS[tool];
+    this.setToolHint(TOOL_HINTS[tool]);
+  }
+
+  /** Open the how-it-works overlay (also wired to the "?" button). */
+  showIntro(pane = 0) {
+    this.intro.open(pane);
   }
 
   update(snapshot: WorldSnapshot) {
     if (this.disposed) return;
     const now = performance.now();
+    for (const c of snapshot.colonies) this.colonyNames.set(c.id, c.name);
     this.updateInspector(snapshot);
+    this.log.update(snapshot.stats.simTime);
     if (now - this.lastUiUpdate < 130) return; // throttle heavier DOM writes to ~7.5Hz
     this.lastUiUpdate = now;
     this.updateStats(snapshot);
@@ -123,6 +291,8 @@ export class HUD {
   dispose() {
     this.disposed = true;
     for (const un of this.unsubscribers) un();
+    this.log?.dispose();
+    this.intro?.dispose();
     this.root.querySelector('.hud-root')?.remove();
   }
 
@@ -133,38 +303,53 @@ export class HUD {
     container.style.pointerEvents = 'none';
     this.root.appendChild(container);
 
-    container.appendChild(this.buildStatsPanel());
-    container.appendChild(this.buildColonyPanel());
-    container.appendChild(this.buildSettingsPanel());
+    // Left column: one flex stack so panels can never sit on top of each
+    // other no matter how tall their contents get (the old hard-coded
+    // `top: 230px` let the colony box cover the bottom of the stats box).
+    const left = el('div', 'hud-left');
+    this.log = new ColonyLog(this.sim, { resolveColonyName: (id) => this.colonyNames.get(id) ?? null });
+    left.append(this.buildStatsPanel(), this.log.element, this.buildColonyPanel());
+    container.appendChild(left);
+
+    container.appendChild(this.buildTopRight());
     container.appendChild(this.buildInspector());
     container.appendChild(this.buildToolbar());
-    container.appendChild(this.buildToastContainer());
-    container.appendChild(this.buildHelpOverlay());
+
+    this.intro = new Intro();
+    container.appendChild(this.intro.element);
+    if (!hasSeenIntro()) this.intro.open();
 
     this.setActiveTool('inspect');
   }
 
   private wireEvents() {
-    const un = this.sim.events.on('colonyFounded', (e) => {
-      this.pushToast(e.parentColonyId === null ? '🐣 A new colony has been founded!' : '🦋 A rogue queen founded a new colony!', '🐣');
-    });
-    const un2 = this.sim.events.on('colonyCollapsed', () => this.pushToast('💀 A colony has collapsed.', '💀'));
-    const un3 = this.sim.events.on('nuptialFlight', (e) =>
-      this.pushToast(`🦋 Nuptial flight! Colony #${e.colonyId} sends alates into the sky.`, '🦋'),
+    // The log owns the narration now; the HUD only reacts to the one event
+    // that needs immediate, in-place feedback where the player is looking.
+    const un = this.sim.events.on('colonyPlacementFailed', () =>
+      this.setToolHint('🚫 No room for a colony there — try open ground, away from the edge.', 'warn', 3200),
     );
-    const un4 = this.sim.events.on('colonyPlacementFailed', () =>
-      this.pushToast("🚫 No room for a colony there — try open ground, away from the edge.", '🚫'),
-    );
-    this.unsubscribers.push(un, un2, un3, un4);
+    this.unsubscribers.push(un);
 
     window.addEventListener('keydown', this.onKeyDown);
     this.unsubscribers.push(() => window.removeEventListener('keydown', this.onKeyDown));
+
+    const onDocPointerDown = (e: PointerEvent) => {
+      if (this.settingsPanelEl.classList.contains('hidden')) return;
+      if (!this.settingsWrapEl.contains(e.target as Node)) this.settingsPanelEl.classList.add('hidden');
+    };
+    document.addEventListener('pointerdown', onDocPointerDown);
+    this.unsubscribers.push(() => document.removeEventListener('pointerdown', onDocPointerDown));
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (e.code === 'Space' && !isTypingTarget(e.target)) {
+    if (isTypingTarget(e.target)) return;
+    if (e.code === 'Space') {
       e.preventDefault();
       this.sim.togglePause();
+      this.refreshSpeedButtons();
+    } else if (e.key === '?') {
+      e.preventDefault();
+      this.intro.open();
     }
   };
 
@@ -192,38 +377,105 @@ export class HUD {
     row('weather', '🌤️', 'Weather');
     row('fps', '⚡', 'FPS');
 
-    const causes = el('div', 'stat-causes');
-    this.statsEls.causes = causes;
-    panel.appendChild(causes);
+    const head = el('div', 'hud-subtitle small deaths-head');
+    head.appendChild(el('span', undefined, 'How they died'));
+    this.deathTotalEl = el('span', 'deaths-total', '0');
+    head.appendChild(this.deathTotalEl);
+    panel.appendChild(head);
+
+    this.deathListEl = el('div', 'death-list');
+    this.deathListEl.appendChild(el('div', 'death-empty', 'Nobody has died yet.'));
+    panel.appendChild(this.deathListEl);
 
     return panel;
   }
 
   private updateStats(s: WorldSnapshot) {
-    this.statsEls.ants.textContent = fmt(s.stats.totalAnts);
-    this.statsEls.larvae.textContent = fmt(s.stats.totalLarvae);
-    this.statsEls.colonies.textContent = fmt(s.stats.totalColonies);
-    this.statsEls.predators.textContent = fmt(s.stats.totalPredators);
-    this.statsEls.births.textContent = fmt(s.stats.birthsPerMinute);
-    this.statsEls.deaths.textContent = fmt(s.stats.deathsPerMinute);
-    this.statsEls.fps.textContent = Math.round(s.stats.fps).toString();
+    const set = (key: string, text: string) => {
+      const e = this.statsEls[key];
+      if (e && e.textContent !== text) e.textContent = text;
+    };
+    set('ants', fmt(s.stats.totalAnts));
+    set('larvae', fmt(s.stats.totalLarvae));
+    set('colonies', fmt(s.stats.totalColonies));
+    set('predators', fmt(s.stats.totalPredators));
+    set('births', fmt(s.stats.birthsPerMinute));
+    set('deaths', fmt(s.stats.deathsPerMinute));
+    set('fps', Math.round(s.stats.fps).toString());
 
-    const day = Math.floor(s.stats.simTime / 150) + 1;
+    // The clock starts at midday, so the day number has to be offset by half a
+    // cycle — without it the date rolled over at noon and you'd watch "Day 2"
+    // appear in the middle of the afternoon.
+    const day = Math.floor((s.stats.simTime + DAY_LENGTH_SECONDS / 2) / DAY_LENGTH_SECONDS) + 1;
     const hh = Math.floor(s.timeOfDay * 24)
       .toString()
       .padStart(2, '0');
     const mm = Math.floor((s.timeOfDay * 24 * 60) % 60)
       .toString()
       .padStart(2, '0');
-    this.statsEls.clock.textContent = `Day ${day}, ${hh}:${mm}`;
+    set('clock', `Day ${day}, ${hh}:${mm}`);
+    set('weather', `${WEATHER_ICON[s.weather] ?? ''} ${s.weather}`);
 
-    this.statsEls.weather.textContent = `${WEATHER_ICON[s.weather] ?? ''} ${s.weather}`;
+    this.updateDeathList(s);
+  }
 
-    const parts = Object.entries(s.stats.deathsByCause)
-      .filter(([, v]) => v > 0)
-      .sort((a, b) => b[1] - a[1])
-      .map(([k, v]) => `${DEATH_LABELS[k as DeathCause]}: ${v}`);
-    this.statsEls.causes.textContent = parts.length ? `Deaths so far — ${parts.join(' · ')}` : '';
+  /** Deaths-by-cause used to be a single line of 10px grey text tucked under
+   * everything else (and, thanks to the old layout, usually covered). It is
+   * now a ranked mini-chart: "they starved" should be obvious at a glance. */
+  private updateDeathList(s: WorldSnapshot) {
+    const causes = Object.entries(s.stats.deathsByCause).filter(([, v]) => v > 0) as [DeathCause, number][];
+    const total = causes.reduce((sum, [, v]) => sum + v, 0);
+    if (this.deathTotalEl.textContent !== String(total)) this.deathTotalEl.textContent = String(total);
+
+    const empty = this.deathListEl.querySelector('.death-empty');
+    if (causes.length === 0) {
+      if (!empty) this.deathListEl.appendChild(el('div', 'death-empty', 'Nobody has died yet.'));
+      for (const [cause, refs] of this.deathRows) {
+        refs.root.remove();
+        this.deathRows.delete(cause);
+      }
+      return;
+    }
+    empty?.remove();
+
+    causes.sort((a, b) => b[1] - a[1]);
+    const max = causes[0][1];
+
+    for (const [cause, count] of causes) {
+      let refs = this.deathRows.get(cause);
+      if (!refs) {
+        const root = el('div', 'death-row');
+        root.append(el('span', 'death-icon', DEATH_ICONS[cause]), el('span', 'death-cause', DEATH_LABELS[cause]));
+        const track = el('span', 'death-track');
+        const bar = el('i', 'death-bar');
+        track.appendChild(bar);
+        const countEl = el('span', 'death-count', '0');
+        root.append(track, countEl);
+        refs = { root, bar, count: countEl, lastCount: -1 };
+        this.deathRows.set(cause, refs);
+        this.deathListEl.appendChild(root);
+      }
+      if (refs.lastCount !== count) {
+        refs.count.textContent = String(count);
+        refs.lastCount = count;
+      }
+      refs.bar.style.width = `${Math.max(6, (count / max) * 100)}%`;
+      refs.root.title = `${DEATH_LABELS[cause]}: ${count} of ${total} deaths`;
+    }
+
+    for (const [cause, refs] of this.deathRows) {
+      if (!causes.some(([c]) => c === cause)) {
+        refs.root.remove();
+        this.deathRows.delete(cause);
+      }
+    }
+
+    // Rank order, moved (not rebuilt) so nothing under the cursor disappears.
+    causes.forEach(([cause], i) => {
+      const refs = this.deathRows.get(cause)!;
+      const at = this.deathListEl.children[i];
+      if (at !== refs.root) this.deathListEl.insertBefore(refs.root, at ?? null);
+    });
   }
 
   // --- Colony leaderboard -----------------------------------------------
@@ -231,59 +483,157 @@ export class HUD {
   private buildColonyPanel(): HTMLElement {
     const panel = el('div', 'hud-panel hud-colonies');
     panel.style.pointerEvents = 'auto';
-    panel.appendChild(el('div', 'hud-subtitle', 'Colonies'));
+    const head = el('div', 'hud-subtitle', 'Colonies');
+    panel.appendChild(head);
+    panel.appendChild(el('div', 'panel-hint', 'Click one to centre the camera on its nest.'));
     this.colonyListEl = el('div', 'colony-list');
+    this.colonyEmptyEl = el('div', 'colony-empty', 'No colonies left…');
+
+    // While the pointer is inside the list we stop re-ranking rows: a row that
+    // slides out from under the cursor mid-click is the other half of why
+    // clicking a colony felt broken.
+    this.colonyListEl.addEventListener('pointerenter', () => (this.colonyListHot = true));
+    this.colonyListEl.addEventListener('pointerleave', () => (this.colonyListHot = false));
+
     panel.appendChild(this.colonyListEl);
     return panel;
   }
 
   private updateColonyList(s: WorldSnapshot) {
-    const colonies = [...s.colonies].sort((a, b) => b.population - a.population);
-    this.colonyListEl.textContent = '';
+    const colonies = [...s.colonies].sort((a, b) => b.population - a.population || a.id - b.id).slice(0, 12);
+
+    // 1. Create-or-update, never rebuild.
+    const keep = new Set<number>();
+    for (const c of colonies) {
+      keep.add(c.id);
+      let refs = this.colonyRows.get(c.id);
+      if (!refs) {
+        refs = this.createColonyRow(c);
+        this.colonyRows.set(c.id, refs);
+        this.colonyListEl.appendChild(refs.root);
+      }
+      refs.data = c;
+      if (refs.lastName !== c.name) {
+        refs.name.textContent = c.name;
+        refs.root.title = `${c.name} — click to centre the camera on its nest`;
+        refs.lastName = c.name;
+      }
+      const pop = Math.round(c.population);
+      if (refs.lastPop !== pop) {
+        refs.pop.textContent = fmt(pop);
+        refs.lastPop = pop;
+      }
+      const status = !c.alive ? '☠' : c.queenAlive ? '♛' : '⚠';
+      if (refs.lastStatus !== status) {
+        refs.status.textContent = status;
+        refs.status.title = !c.alive ? 'Collapsed' : c.queenAlive ? 'Queen alive' : 'No queen — this colony is doomed';
+        refs.status.classList.toggle('warn', c.alive && !c.queenAlive);
+        refs.lastStatus = status;
+      }
+      if (refs.lastHue !== c.colorHue) {
+        refs.dot.style.background = `hsl(${c.colorHue}, 75%, 55%)`;
+        refs.lastHue = c.colorHue;
+      }
+      refs.root.classList.toggle('active', this.focusedColonyId === c.id);
+    }
+
+    // 2. Drop rows for colonies that are gone.
+    for (const [id, refs] of this.colonyRows) {
+      if (keep.has(id)) continue;
+      refs.root.remove();
+      this.colonyRows.delete(id);
+    }
+
+    // 3. Empty state as a sibling node, so reordering only ever sees rows.
     if (colonies.length === 0) {
-      this.colonyListEl.appendChild(el('div', 'colony-empty', 'No colonies left…'));
+      if (!this.colonyEmptyEl.isConnected) this.colonyListEl.appendChild(this.colonyEmptyEl);
       return;
     }
-    for (const c of colonies.slice(0, 12)) {
-      const row = el('div', 'colony-row');
-      const dot = el('span', 'colony-dot');
-      dot.style.background = `hsl(${c.colorHue}, 75%, 55%)`;
-      row.appendChild(dot);
-      row.appendChild(el('span', 'colony-name', c.name));
-      row.appendChild(el('span', 'colony-pop', fmt(c.population)));
-      row.appendChild(el('span', 'colony-status', c.queenAlive ? '♛' : '☠'));
-      row.addEventListener('click', () => this.opts.onFocusPosition?.(c.nestPos));
-      this.colonyListEl.appendChild(row);
-    }
+    this.colonyEmptyEl.remove();
+
+    // 4. Re-rank by moving existing nodes — but never while the pointer is in
+    //    the list, or the row the player is aiming at walks away mid-click.
+    if (this.colonyListHot || this.colonyListEl.matches(':hover')) return;
+    colonies.forEach((c, i) => {
+      const refs = this.colonyRows.get(c.id)!;
+      const at = this.colonyListEl.children[i];
+      if (at !== refs.root) this.colonyListEl.insertBefore(refs.root, at ?? null);
+    });
+  }
+
+  private createColonyRow(c: ColonySnapshot): ColonyRowRefs {
+    const root = el('div', 'colony-row');
+    root.setAttribute('role', 'button');
+    root.tabIndex = 0;
+    const dot = el('span', 'colony-dot');
+    const name = el('span', 'colony-name');
+    const pop = el('span', 'colony-pop');
+    const status = el('span', 'colony-status');
+    root.append(dot, name, pop, status);
+
+    const refs: ColonyRowRefs = {
+      root,
+      dot,
+      name,
+      pop,
+      status,
+      data: c,
+      lastName: '',
+      lastPop: -1,
+      lastStatus: '',
+      lastHue: -1,
+    };
+
+    // Bound once, at creation. It reads `refs.data`, which `updateColonyList`
+    // keeps fresh, so the handler can never close over a stale snapshot.
+    const activate = () => this.focusColony(refs.data);
+    root.addEventListener('click', activate);
+    root.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        activate();
+      }
+    });
+    return refs;
+  }
+
+  private focusColony(c: ColonySnapshot) {
+    this.focusedColonyId = c.id;
+    this.opts.onFocusPosition?.(c.nestPos);
+    for (const [id, refs] of this.colonyRows) refs.root.classList.toggle('active', id === c.id);
+    // Handy for tests and for anyone wiring extra behaviour to the selection.
+    this.colonyListEl.dataset.focusedColony = String(c.id);
+    this.colonyListEl.dataset.focusCount = String((Number(this.colonyListEl.dataset.focusCount) || 0) + 1);
+  }
+
+  // --- Top-right cluster: help + settings ---------------------------------
+
+  private buildTopRight(): HTMLElement {
+    const wrap = el('div', 'hud-topright');
+    wrap.style.pointerEvents = 'auto';
+
+    const help = el('button', 'hud-help-btn');
+    help.type = 'button';
+    help.innerHTML = '<span class="hud-help-mark">?</span><span class="hud-help-label">How it works</span>';
+    help.title = 'What am I looking at? (press ?)';
+    help.setAttribute('aria-label', 'How it works');
+    help.addEventListener('click', () => this.intro.open());
+
+    wrap.append(help, this.buildSettingsPanel());
+    return wrap;
   }
 
   // --- Settings ----------------------------------------------------------
 
   private buildSettingsPanel(): HTMLElement {
     const wrap = el('div', 'hud-settings-wrap');
-    wrap.style.pointerEvents = 'auto';
+    this.settingsWrapEl = wrap;
     const toggle = el('button', 'hud-icon-btn hud-settings-toggle', '⚙️');
+    toggle.title = 'Speed, view and graphics settings';
     const panel = el('div', 'hud-panel hud-settings hidden');
     this.settingsPanelEl = panel;
     toggle.addEventListener('click', () => panel.classList.toggle('hidden'));
-
-    panel.appendChild(el('div', 'hud-subtitle', 'Processing power'));
-    const tierWrap = el('div', 'tier-list');
-    for (const tier of PERFORMANCE_TIER_ORDER) {
-      const p = PERFORMANCE_PROFILES[tier];
-      const btn = el('button', 'tier-btn');
-      btn.appendChild(el('div', 'tier-label', p.label));
-      btn.appendChild(el('div', 'tier-blurb', p.blurb));
-      btn.addEventListener('click', () => {
-        this.sim.setTier(tier);
-        this.refreshTierButtons(tierWrap);
-        this.opts.onWorldReset?.();
-      });
-      btn.dataset.tier = tier;
-      tierWrap.appendChild(btn);
-    }
-    panel.appendChild(tierWrap);
-    this.refreshTierButtons(tierWrap);
 
     panel.appendChild(el('div', 'hud-subtitle', 'Speed'));
     const speedWrap = el('div', 'speed-list');
@@ -296,6 +646,7 @@ export class HUD {
     ];
     for (const [mult, label] of speeds) {
       const btn = el('button', 'speed-btn', label);
+      btn.dataset.speed = String(mult);
       btn.addEventListener('click', () => {
         this.sim.setSpeed(mult);
         this.refreshSpeedButtons();
@@ -304,6 +655,7 @@ export class HUD {
       speedWrap.appendChild(btn);
     }
     panel.appendChild(speedWrap);
+    panel.appendChild(el('div', 'panel-hint', 'Space bar pauses and resumes.'));
     this.refreshSpeedButtons();
 
     panel.appendChild(el('div', 'hud-subtitle', 'View'));
@@ -325,6 +677,25 @@ export class HUD {
     refreshView();
     viewWrap.append(surfaceBtn, undergroundBtn);
     panel.appendChild(viewWrap);
+    panel.appendChild(el('div', 'panel-hint', 'Underground shows the nest chambers, queen and larvae.'));
+
+    panel.appendChild(el('div', 'hud-subtitle', 'Processing power'));
+    const tierWrap = el('div', 'tier-list');
+    for (const tier of PERFORMANCE_TIER_ORDER) {
+      const p = PERFORMANCE_PROFILES[tier];
+      const btn = el('button', 'tier-btn');
+      btn.appendChild(el('div', 'tier-label', p.label));
+      btn.appendChild(el('div', 'tier-blurb', p.blurb));
+      btn.addEventListener('click', () => {
+        this.sim.setTier(tier);
+        this.refreshTierButtons(tierWrap);
+        this.opts.onWorldReset?.();
+      });
+      btn.dataset.tier = tier;
+      tierWrap.appendChild(btn);
+    }
+    panel.appendChild(tierWrap);
+    this.refreshTierButtons(tierWrap);
 
     this.restartBtn = el('button', 'restart-btn', 'Restart simulation');
     this.restartBtn.addEventListener('click', () => {
@@ -354,9 +725,8 @@ export class HUD {
   }
 
   private refreshSpeedButtons() {
-    const speeds = [0, 1, 2, 5, 10];
     const current = this.sim.isPaused() ? 0 : this.sim.getSpeed();
-    this.speedButtons.forEach((b, i) => b.classList.toggle('active', speeds[i] === current));
+    this.speedButtons.forEach((b) => b.classList.toggle('active', Number(b.dataset.speed) === current));
   }
 
   // --- Inspector -----------------------------------------------------------
@@ -365,11 +735,78 @@ export class HUD {
     const panel = el('div', 'hud-panel hud-inspector hidden');
     panel.style.pointerEvents = 'auto';
     this.inspectorEl = panel;
+
+    const closeBtn = el('button', 'inspector-close', '✕');
+    closeBtn.title = 'Close';
+    closeBtn.addEventListener('click', () => this.sim.clearSelection());
+    panel.appendChild(closeBtn);
+
+    // --- ant view ---
+    const antView = el('div', 'inspector-view hidden');
+    const caste = el('div', 'hud-subtitle');
+    const casteBlurb = el('div', 'insp-blurb');
+    const colonyLine = el('div', 'insp-colony');
+    const antColonyDot = el('span', 'colony-dot');
+    const antColonyName = el('span', 'insp-colony-name');
+    colonyLine.append(antColonyDot, antColonyName);
+    const task = el('div', 'inspector-task');
+    const story = el('div', 'insp-story');
+    const carrying = el('div', 'insp-carry hidden');
+    const energy = buildMeter('Hunger');
+    const health = buildMeter('Health');
+    const life = buildMeter('Life');
+    const lifeNote = el('div', 'insp-note');
+    antView.append(caste, casteBlurb, colonyLine, task, story, carrying, energy.row, health.row, life.row, lifeNote);
+
+    antView.appendChild(el('div', 'hud-subtitle small', 'Genetics'));
+    const genetics: Record<string, Meter> = {};
+    for (const [key, label] of [
+      ['speed', 'Speed'],
+      ['strength', 'Strength'],
+      ['senseRadius', 'Sense'],
+      ['lifespan', 'Lifespan'],
+      ['aggression', 'Aggression'],
+      ['industriousness', 'Work drive'],
+    ] as [string, string][]) {
+      const m = buildMeter(label);
+      genetics[key] = m;
+      antView.appendChild(m.row);
+    }
+    panel.appendChild(antView);
+
+    // --- colony view ---
+    const colonyView = el('div', 'inspector-view hidden');
+    const colonyName = el('div', 'hud-subtitle');
+    const colonyStatus = el('div', 'inspector-task');
+    const colonyFacts = el('div', 'insp-facts');
+    const colonyCastes = el('div', 'caste-bars');
+    colonyView.append(colonyName, colonyStatus, colonyFacts, colonyCastes);
+    panel.appendChild(colonyView);
+
+    this.insp = {
+      antView,
+      colonyView,
+      caste,
+      casteBlurb,
+      antColonyDot,
+      antColonyName,
+      task,
+      story,
+      carrying,
+      energy,
+      health,
+      life,
+      lifeNote,
+      genetics,
+      colonyName,
+      colonyStatus,
+      colonyFacts,
+      colonyCastes,
+    };
     return panel;
   }
 
   private updateInspector(s: WorldSnapshot) {
-    void s;
     const ant = this.sim.getSelectedAnt();
     const colony = ant ? null : this.sim.getSelectedColony();
     if (!ant && !colony) {
@@ -377,37 +814,73 @@ export class HUD {
       return;
     }
     this.inspectorEl.classList.remove('hidden');
-    this.inspectorEl.textContent = '';
+    const i = this.insp;
+    i.antView.classList.toggle('hidden', !ant);
+    i.colonyView.classList.toggle('hidden', !!ant);
 
-    const closeBtn = el('button', 'inspector-close', '✕');
-    closeBtn.addEventListener('click', () => this.sim.clearSelection());
-    this.inspectorEl.appendChild(closeBtn);
+    const setText = (e: HTMLElement, text: string) => {
+      if (e.textContent !== text) e.textContent = text;
+    };
 
     if (ant) {
-      this.inspectorEl.appendChild(el('div', 'hud-subtitle', CASTE_LABELS[ant.caste]));
-      this.inspectorEl.appendChild(el('div', 'inspector-task', TASK_LABELS[ant.task]));
-      this.inspectorEl.appendChild(meterRow('Energy', ant.energy, 100, '#7ee07e'));
-      this.inspectorEl.appendChild(meterRow('Health', ant.health, 100, '#e07e7e'));
-      this.inspectorEl.appendChild(el('div', 'inspector-age', `Age: ${Math.round(ant.age)}s`));
-      this.inspectorEl.appendChild(el('div', 'hud-subtitle small', 'Genetics'));
-      this.inspectorEl.appendChild(meterRow('Speed', ant.genetics.speed, 1.4, '#6fb7ff'));
-      this.inspectorEl.appendChild(meterRow('Strength', ant.genetics.strength, 1.4, '#ff9d6f'));
-      this.inspectorEl.appendChild(meterRow('Sense', ant.genetics.senseRadius, 1.3, '#c9a2ff'));
-      this.inspectorEl.appendChild(meterRow('Lifespan', ant.genetics.lifespan, 1.3, '#a2ffcf'));
-      this.inspectorEl.appendChild(meterRow('Aggression', ant.genetics.aggression, 1, '#ff6f6f'));
-      this.inspectorEl.appendChild(meterRow('Industriousness', ant.genetics.industriousness, 1, '#ffe36f'));
+      setText(i.caste, CASTE_LABELS[ant.caste]);
+      setText(i.casteBlurb, CASTE_BLURB[ant.caste]);
+
+      const home = s.colonies.find((c) => c.id === ant.colonyId);
+      const hue = home ? home.colorHue : ant.genetics.hue;
+      const dotColor = `hsl(${hue}, 75%, 55%)`;
+      if (i.antColonyDot.dataset.color !== dotColor) {
+        i.antColonyDot.style.background = dotColor;
+        i.antColonyDot.dataset.color = dotColor;
+      }
+      setText(i.antColonyName, home ? `${home.name} · ${home.population} ants` : 'Colonyless');
+
+      setText(i.task, TASK_LABELS[ant.task]);
+      setText(i.story, TASK_STORY[ant.task]);
+
+      const carryAmount = ant.carryAmount;
+      const carryText = ant.carrying
+        ? `🌰 Carrying food${carryAmount ? ` (${carryAmount.toFixed(1)} units)` : ''} back to the nest.`
+        : '';
+      i.carrying.classList.toggle('hidden', !ant.carrying);
+      if (ant.carrying) setText(i.carrying, carryText);
+
+      const hunger = hungerWord(ant.energy);
+      setMeter(i.energy, ant.energy, 100, hunger.color, `${hunger.word} ${Math.round(ant.energy)}%`);
+      const hp = healthWord(ant.health);
+      setMeter(i.health, ant.health, 100, hp.color, `${hp.word} ${Math.round(ant.health)}%`);
+
+      const expected = expectedLifespan(ant);
+      const frac = ant.age / expected;
+      setMeter(i.life, frac, 1, frac > 0.8 ? '#e0a95c' : '#8fd166', `${clockStr(ant.age)} / ~${clockStr(expected)}`);
+      setText(
+        i.lifeNote,
+        `${clockStr(ant.age)} old — ${lifeStage(frac)}. A ${CASTE_LABELS[ant.caste].toLowerCase()} lives about ${clockStr(expected)} of sim time.`,
+      );
+
+      const g = ant.genetics;
+      setMeter(i.genetics.speed, g.speed, 1.4, '#6fb7ff', g.speed.toFixed(2));
+      setMeter(i.genetics.strength, g.strength, 1.4, '#ff9d6f', g.strength.toFixed(2));
+      setMeter(i.genetics.senseRadius, g.senseRadius, 1.3, '#c9a2ff', g.senseRadius.toFixed(2));
+      setMeter(i.genetics.lifespan, g.lifespan, 1.3, '#a2ffcf', g.lifespan.toFixed(2));
+      setMeter(i.genetics.aggression, g.aggression, 1, '#ff6f6f', g.aggression.toFixed(2));
+      setMeter(i.genetics.industriousness, g.industriousness, 1, '#ffe36f', g.industriousness.toFixed(2));
     } else if (colony) {
-      this.inspectorEl.appendChild(el('div', 'hud-subtitle', colony.name));
-      this.inspectorEl.appendChild(el('div', 'inspector-task', colony.alive ? (colony.queenAlive ? 'Thriving' : 'Queenless') : 'Collapsed'));
-      this.inspectorEl.appendChild(el('div', 'inspector-age', `Population: ${colony.population} · Food: ${Math.round(colony.foodStore)}`));
-      this.inspectorEl.appendChild(el('div', 'inspector-age', `Generation ${colony.generation} · Territory ${Math.round(colony.territoryRadius)}u`));
-      const casteWrap = el('div', 'caste-bars');
-      (['worker', 'soldier', 'drone', 'alateQueen'] as Caste[]).forEach((c) => {
-        const n = colony.populationByCaste[c] ?? 0;
-        if (n === 0) return;
-        casteWrap.appendChild(el('div', 'caste-row', `${CASTE_LABELS[c]}: ${n}`));
-      });
-      this.inspectorEl.appendChild(casteWrap);
+      setText(i.colonyName, colony.name);
+      setText(i.colonyStatus, colony.alive ? (colony.queenAlive ? 'Thriving — the queen is laying' : 'Queenless — no new ants will hatch') : 'Collapsed');
+      const facts = [
+        `Population ${colony.population} · Food store ${Math.round(colony.foodStore)}`,
+        `Generation ${colony.generation} · Territory ${Math.round(colony.territoryRadius)}u`,
+        `Founded at ${clockStr(colony.founded)}`,
+      ];
+      if (colony.foodCollected !== undefined) facts.push(`Food hauled home so far: ${Math.round(colony.foodCollected)}`);
+      setText(i.colonyFacts, facts.join('\n'));
+
+      const parts = (['queen', 'worker', 'soldier', 'drone', 'alateQueen'] as Caste[])
+        .map((c) => [c, colony.populationByCaste[c] ?? 0] as const)
+        .filter(([, n]) => n > 0)
+        .map(([c, n]) => `${CASTE_LABELS[c]}: ${n}`);
+      setText(i.colonyCastes, parts.join('  ·  '));
     }
   }
 
@@ -425,8 +898,11 @@ export class HUD {
     ];
     for (const [mode, icon, label] of tools) {
       const btn = el('button', 'tool-btn');
-      btn.innerHTML = `<span>${icon}</span>`;
-      btn.title = label;
+      btn.type = 'button';
+      btn.innerHTML = `<span class="tool-icon">${icon}</span><span class="tool-label">${label}</span>`;
+      btn.title = `${label} — ${TOOL_HINTS[mode]}`;
+      btn.setAttribute('aria-label', label);
+      btn.dataset.tool = mode;
       btn.addEventListener('click', () => this.setActiveTool(mode));
       this.toolButtons[mode] = btn;
       bar.appendChild(btn);
@@ -436,87 +912,19 @@ export class HUD {
     return wrap;
   }
 
-  // --- Toasts -----------------------------------------------------------
-
-  private buildToastContainer(): HTMLElement {
-    this.toastContainer = el('div', 'hud-toasts');
-    return this.toastContainer;
-  }
-
-  private pushToast(text: string, icon: string) {
-    this.toastQueue.push({ text, icon });
-    this.drainToasts();
-  }
-
-  private drainToasts() {
-    if (this.toastShowing || this.toastQueue.length === 0) return;
-    const next = this.toastQueue.shift()!;
-    this.toastShowing = true;
-    const toast = el('div', 'hud-toast', next.text);
-    this.toastContainer.appendChild(toast);
-    setTimeout(() => {
-      toast.classList.add('fade-out');
-      setTimeout(() => {
-        toast.remove();
-        this.toastShowing = false;
-        this.drainToasts();
-      }, 300);
-    }, 3600);
-  }
-
-  // --- First-run help ------------------------------------------------------
-
-  private buildHelpOverlay(): HTMLElement {
-    const card = el('div', 'hud-help');
-    if (safeGetItem('formicarium-help-seen')) {
-      card.classList.add('hidden');
-      return card;
+  /** The hint line under the tool bar doubles as the place for transient
+   * feedback ("no room for a colony there"), right where the player just
+   * clicked — no floating toast to chase or to cover the panels. */
+  private setToolHint(text: string, kind: 'normal' | 'warn' = 'normal', revertAfterMs = 0) {
+    window.clearTimeout(this.toolHintTimer);
+    this.toolHintEl.textContent = text;
+    this.toolHintEl.classList.toggle('warn', kind === 'warn');
+    if (revertAfterMs > 0) {
+      this.toolHintTimer = window.setTimeout(() => {
+        this.toolHintEl.textContent = TOOL_HINTS[this.activeTool];
+        this.toolHintEl.classList.remove('warn');
+      }, revertAfterMs);
     }
-    card.style.pointerEvents = 'auto';
-    card.appendChild(el('div', 'hud-subtitle', 'Welcome to Formicarium'));
-    card.appendChild(
-      el(
-        'div',
-        'hud-help-text',
-        'Drag to pan, scroll or pinch to zoom. Use the tool bar to inspect ants, drop food, summon predators, or found a rogue colony. The gear icon opens settings.',
-      ),
-    );
-    const dismiss = el('button', 'hud-help-dismiss', 'Got it');
-    dismiss.addEventListener('click', () => {
-      safeSetItem('formicarium-help-seen', '1');
-      card.classList.add('hidden');
-    });
-    card.appendChild(dismiss);
-    return card;
-  }
-}
-
-function meterRow(label: string, value: number, max: number, color: string): HTMLElement {
-  const row = el('div', 'meter-row');
-  row.appendChild(el('span', 'meter-label', label));
-  const track = el('div', 'meter-track');
-  const fill = el('div', 'meter-fill');
-  fill.style.width = `${Math.max(0, Math.min(100, (value / max) * 100))}%`;
-  fill.style.background = color;
-  track.appendChild(fill);
-  row.appendChild(track);
-  return row;
-}
-
-function safeGetItem(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function safeSetItem(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Private browsing / disabled storage — the help card just reappears
-    // next visit, which is a fine fallback.
   }
 }
 

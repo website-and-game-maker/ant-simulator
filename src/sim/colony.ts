@@ -32,6 +32,18 @@ const MATURE_POPULATION = 26; // population at which a colony can start producin
 const NUPTIAL_FOOD_SURPLUS_TICKS = 40; // seconds of sustained surplus needed to trigger a flight
 
 /**
+ * Food the queen draws from the larder per second.
+ *
+ * This used to be 0.6/s, which is the entire output of four or five foragers.
+ * A young colony's whole income went into the queen, the store sat pinned at
+ * zero, no eggs could be paid for (they cost 4 each) and no larva could be
+ * fed — so every colony hovered at its founding population and then bled out.
+ * At 0.12 a handful of foragers covers her and the surplus goes into brood,
+ * which is what makes the population curve actually move.
+ */
+const QUEEN_UPKEEP = 0.12;
+
+/**
  * A single ant colony: a queen, her larvae, and however many adult ants are
  * currently alive and roaming (those are tracked as `Ant` instances by
  * Simulation — Colony only keeps counts + the biology that doesn't need a
@@ -48,6 +60,10 @@ export class Colony {
   founded: number;
   alive = true;
   territoryRadius = 140;
+  /** Lifetime totals, for the HUD and for balance testing. */
+  foodCollected = 0;
+  foodShared = 0;
+  foragingTrips = 0;
 
   private queenGenetics: Genetics;
   private droneGenetics: Genetics;
@@ -124,7 +140,30 @@ export class Colony {
 
   receiveForager(amount: number, _industriousness: number) {
     void _industriousness;
+    if (amount <= 0) return;
     this.foodStore += amount;
+    this.foodCollected += amount;
+    this.foragingTrips++;
+  }
+
+  /**
+   * Trophallaxis — the mouth-to-mouth food sharing that actually keeps an ant
+   * colony alive. A hungry ant at the nest entrance begs; nestmates give it
+   * whatever the communal store can spare and it walks back out fed. This is
+   * why a worker's survival depends on the *colony's* larder rather than on
+   * its own personal luck at finding a crumb, and why a colony sitting on a
+   * full pantry doesn't watch its workforce drop dead on the doorstep.
+   *
+   * Returns how much food was actually handed over. An empty larder hands
+   * over nothing, so a colony that can't feed itself genuinely starves —
+   * the stakes are unchanged, only the plumbing is fixed.
+   */
+  requestTrophallaxis(amount: number): number {
+    if (!(amount > 0) || this.foodStore <= 0) return 0;
+    const given = Math.min(amount, this.foodStore);
+    this.foodStore -= given;
+    this.foodShared += given;
+    return given;
   }
 
   /** Called by Simulation when a larva finished maturing but the *global*
@@ -177,7 +216,7 @@ export class Colony {
         // colony's food store and her energy tracks how well-fed she is.
         this.queenEnergy -= species.metabolism * 0.5 * dt;
         if (this.foodStore > 1) {
-          this.foodStore -= Math.min(this.foodStore, 0.6 * dt);
+          this.foodStore -= Math.min(this.foodStore, QUEEN_UPKEEP * dt);
           this.queenEnergy = Math.min(100, this.queenEnergy + 1.2 * dt);
         }
       }
@@ -279,6 +318,8 @@ export class Colony {
       founded: this.founded,
       alive: this.alive,
       avgGenetics: this.averageGenetics(),
+      foodCollected: this.foodCollected,
+      foodShared: this.foodShared,
     };
   }
 
