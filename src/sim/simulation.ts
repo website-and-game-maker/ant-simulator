@@ -36,6 +36,34 @@ import { inheritGenetics, randomGenetics } from './genetics';
  * build a visible highway, short enough that routes to exhausted sources fade
  * and the colony re-explores.
  */
+/**
+ * Largest slice of sim time any single `step()` may advance.
+ *
+ * Everything in the engine assumes a small step: ants integrate position by
+ * `speed * dt`, combat is resolved by proximity, and obstacle avoidance is a
+ * per-step steering nudge. Stretch the step and all three degrade at once —
+ * ants teleport past food, walk through rocks, and skip the frame where a
+ * fight would have been detected. 1/45s keeps the behaviour identical to 1x no
+ * matter how fast the clock is turned.
+ */
+const MAX_STEP_SECONDS = 1 / 45;
+
+/**
+ * Share of the frame `update()` may spend stepping, and the absolute bounds
+ * on that.
+ *
+ * At high speed the requested step count routinely exceeds what a frame can
+ * afford, so there has to be a stopping rule. A fixed millisecond budget was
+ * the obvious one and the wrong one: it hands a fast machine the same 12ms as
+ * a slow one, so a desktop that could comfortably deliver a true 50x gets
+ * capped at the speed a laptop manages. Taking a *share* of the measured
+ * frame instead lets each machine give what it has, while still leaving over
+ * half of every frame for rendering so the picture never stutters.
+ */
+const STEP_BUDGET_FRAME_SHARE = 0.45;
+const MIN_STEP_BUDGET_MS = 6;
+const MAX_STEP_BUDGET_MS = 26;
+
 const FOOD_TRAIL_EVAPORATION = 0.03;
 const ALARM_TRAIL_EVAPORATION = 1.4;
 /** Minimum cell strength included in the rendered pheromone snapshot. The low
@@ -81,6 +109,8 @@ export class Simulation implements ISimulation {
   private foodsHash!: SpatialHash<FoodSource>;
 
   private speedMultiplier = 1;
+  private stepsLastFrame = 0;
+  private stepsRequestedLastFrame = 0;
   private lastNonZeroSpeed = 1;
   private paused = false;
   private view: 'surface' | 'underground' = 'surface';
@@ -402,11 +432,52 @@ export class Simulation implements ISimulation {
     this.frameDtEma += (realDtSeconds - this.frameDtEma) * 0.08;
     if (!this.paused && this.speedMultiplier > 0) {
       const simDt = Math.min(realDtSeconds, 0.25) * this.speedMultiplier;
-      const substeps = this.profile.simSubsteps;
-      const stepDt = simDt / substeps;
-      for (let i = 0; i < substeps; i++) this.step(stepDt);
+
+      // Step count is driven by MAX_STEP_SECONDS, not by a fixed substep
+      // count. It used to be `simDt / profile.simSubsteps`, which meant the
+      // step grew in lockstep with the speed multiplier: at 10x on one
+      // substep an ant advanced a sixth of a second per step, far enough to
+      // stride over food, miss a fight, and walk through a rock. "10x" was
+      // really "a different, worse simulation". Holding the step size fixed
+      // and taking more of them keeps 50x the *same* simulation, just further
+      // along.
+      let steps = Math.ceil(simDt / MAX_STEP_SECONDS);
+      // The profile's substep count is now a floor for quality at 1x rather
+      // than the whole story, so the high tiers still integrate more finely.
+      steps = Math.max(steps, this.profile.simSubsteps);
+
+      // Real-time budget. Without it a big world at 50x would happily spend
+      // 200ms on one frame and the page would judder to a halt; better to
+      // quietly advance a little less than to drop the frame rate through the
+      // floor. Checked against the clock rather than a step count so it
+      // adapts to whatever machine this is.
+      const budgetMs = Math.min(
+        MAX_STEP_BUDGET_MS,
+        Math.max(MIN_STEP_BUDGET_MS, this.frameDtEma * 1000 * STEP_BUDGET_FRAME_SHARE),
+      );
+      const deadline = t0 + budgetMs;
+      const stepDt = simDt / steps;
+      let taken = 0;
+      for (let i = 0; i < steps; i++) {
+        this.step(stepDt);
+        taken++;
+        if (i % 4 === 3 && performance.now() > deadline) break;
+      }
+      this.stepsLastFrame = taken;
+      this.stepsRequestedLastFrame = steps;
+    } else {
+      this.stepsLastFrame = 0;
+      this.stepsRequestedLastFrame = 0;
     }
     this.simMsPerFrame = performance.now() - t0;
+  }
+
+  /** How many steps actually ran last frame, and how many were wanted. When
+   * these diverge the sim is running slower than the chosen multiplier
+   * because it hit the frame budget — the HUD says so rather than silently
+   * lying about the speed. */
+  getStepLoad(): { taken: number; requested: number } {
+    return { taken: this.stepsLastFrame, requested: this.stepsRequestedLastFrame };
   }
 
   setTier(tier: PerformanceTierName): void {

@@ -1500,3 +1500,271 @@ body {
 .hud-feedback-btn {
   font-size: 16px;
 }
+
+/* ==========================================================================
+   --- Speed bar + tool hotkeys ---
+   Speed used to live behind the settings gear, where most people never found
+   it and concluded the simulator did nothing. It is now a permanent strip
+   under the tool bar: the most-reached-for control in the UI, one click away.
+   ========================================================================== */
+
+.speed-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  margin-top: 7px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--panel-shadow);
+  pointer-events: auto;
+}
+
+.speed-chip {
+  min-width: 38px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.speed-chip:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--ink);
+}
+.speed-chip.active {
+  background: var(--accent);
+  color: #14240c;
+}
+/* The pause chip reads as a state, not a speed, so it gets its own colour
+   when active — otherwise "paused" and "1×" look identical at a glance. */
+.speed-chip[data-speed='0'].active {
+  background: var(--accent-amber);
+  color: #241a08;
+}
+
+.speed-load {
+  margin-left: 4px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-amber);
+  white-space: nowrap;
+}
+.speed-load.hidden {
+  display: none;
+}
+
+/* Number badge on each tool. Hotkeys nobody can see are hotkeys nobody uses. */
+.tool-btn {
+  position: relative;
+}
+.tool-key {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-dim);
+  opacity: 0.65;
+}
+.tool-btn.active .tool-key {
+  color: var(--accent);
+  opacity: 1;
+}
+
+@media (max-width: 560px) {
+  .speed-chip {
+    min-width: 32px;
+    padding: 5px 6px;
+    font-size: 11px;
+  }
+}
+
+/* ==========================================================================
+   --- Toasts ---
+   Top-centre, above the world but below the modals. The colony log is the
+   complete quiet record; this is the handful of moments a run that deserve to
+   interrupt. Never interactive — a click meant for the ground must always
+   reach the ground.
+   ========================================================================== */
+
+.toast-stack {
+  position: absolute;
+  top: 66px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--panel-border);
+  background: rgba(20, 28, 22, 0.93);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
+  animation: toast-in 0.28s cubic-bezier(0.2, 1.1, 0.4, 1);
+}
+.toast.leaving {
+  animation: toast-out 0.3s ease forwards;
+}
+.toast.bump {
+  animation: toast-bump 0.3s ease;
+}
+
+.toast-icon {
+  flex: 0 0 auto;
+  font-size: 22px;
+  line-height: 1;
+}
+.toast-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.toast-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.toast-body {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.toast-count {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.toast-count.hidden {
+  display: none;
+}
+
+/* Tone is carried by a left edge rather than a full tint, so the cards stay
+   legible over both pale sand and dark soil. */
+.toast-good {
+  border-left: 3px solid var(--accent);
+}
+.toast-bad {
+  border-left: 3px solid var(--danger);
+}
+.toast-event {
+  border-left: 3px solid var(--accent-amber);
+}
+.toast-milestone {
+  border-left: 3px solid #d7b0ff;
+  background: linear-gradient(100deg, rgba(56, 34, 78, 0.95), rgba(20, 28, 22, 0.95));
+}
+.toast-milestone .toast-title {
+  color: #e9d5ff;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-14px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes toast-out {
+  to { opacity: 0; transform: translateY(-10px) scale(0.97); }
+}
+@keyframes toast-bump {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.035); }
+  100% { transform: scale(1); }
+}
+
+/* Honour a stated preference for less motion: the cards still appear and
+   still say what happened, they just stop flying in. */
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast.leaving,
+  .toast.bump {
+    animation: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .toast-stack {
+    top: 58px;
+  }
+  .toast-body {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   --- Milestone shelf ---
+   Locked entries are silhouettes: enough to say "there is something here to
+   find", not enough to turn into a checklist.
+   ========================================================================== */
+
+.ms-wrap {
+  margin-top: 4px;
+}
+.ms-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+.ms-cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
+  font-size: 13px;
+  color: rgba(159, 181, 154, 0.4);
+  cursor: default;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+.ms-cell.got {
+  background: rgba(215, 176, 255, 0.14);
+  border-color: rgba(215, 176, 255, 0.34);
+  color: var(--ink);
+}
+.ms-cell.got:hover {
+  transform: translateY(-1px) scale(1.06);
+  background: rgba(215, 176, 255, 0.24);
+}
+
+/* On a phone the top-right cluster sat across the "Formicarium" title in the
+   stats panel. Dropping the button's text label leaves just the ? disc, which
+   is narrow enough for the two to coexist. */
+@media (max-width: 560px) {
+  .hud-help-label {
+    display: none;
+  }
+  .hud-help-btn {
+    padding: 0 9px;
+  }
+}

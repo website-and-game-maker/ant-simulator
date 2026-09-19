@@ -56,6 +56,53 @@ export class Camera {
     this.y -= dy / this.zoom;
   }
 
+  /**
+   * Throw the camera and let it coast to a stop.
+   *
+   * Velocity is kept in *screen* pixels per second and converted on use, so a
+   * flick travels the same distance across the screen whatever the zoom —
+   * which is what the hand expects. Without this, panning stopped dead the
+   * instant the button came up, which is the difference between dragging a map
+   * and dragging a spreadsheet.
+   */
+  private vx = 0;
+  private vy = 0;
+
+  /** Called on release with the drag's last measured screen velocity. */
+  fling(vxPerSecond: number, vyPerSecond: number) {
+    // Below this a "flick" is really just a shaky release; coasting then feels
+    // like the camera drifting on its own.
+    if (Math.hypot(vxPerSecond, vyPerSecond) < 60) {
+      this.vx = 0;
+      this.vy = 0;
+      return;
+    }
+    this.vx = vxPerSecond;
+    this.vy = vyPerSecond;
+  }
+
+  stopFling() {
+    this.vx = 0;
+    this.vy = 0;
+  }
+
+  get isCoasting(): boolean {
+    return this.vx !== 0 || this.vy !== 0;
+  }
+
+  /** Advance any coast. Exponential decay, framerate-independent. */
+  stepMomentum(dt: number) {
+    if (!this.isCoasting) return;
+    const decay = Math.pow(0.0025, dt); // ~99.75% shed per second
+    this.panByScreenDelta(this.vx * dt, this.vy * dt);
+    this.vx *= decay;
+    this.vy *= decay;
+    if (Math.hypot(this.vx, this.vy) < 8) {
+      this.vx = 0;
+      this.vy = 0;
+    }
+  }
+
   zoomAt(screenPos: Vec2, factor: number, viewportW: number, viewportH: number) {
     const before = this.screenToWorld(screenPos, viewportW, viewportH);
     this.zoom = clamp(this.zoom * factor, this.minZoom, this.maxZoom);
