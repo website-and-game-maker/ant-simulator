@@ -35,6 +35,10 @@ export interface ISimulation {
   /** Advance the simulation by `realDtSeconds` of wall-clock time (internally
    * scaled by speed multiplier and fixed-stepped for stability). */
   update(realDtSeconds: number): void;
+  /** Steps actually taken last frame vs. steps the chosen multiplier asked
+   * for. They diverge when the frame budget bites, which the HUD surfaces
+   * rather than silently running slower than the badge claims. */
+  getStepLoad(): { taken: number; requested: number };
 
   // --- world interaction (things a player can click/tap to do) ------------
   placeFoodAt(pos: Vec2): void;

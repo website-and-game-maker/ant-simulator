@@ -8,6 +8,8 @@ import { DAY_LENGTH_SECONDS } from '../sim/weather';
 import { ColonyLog } from './colonyLog';
 import { Intro, hasSeenIntro } from './intro';
 import { FeedbackPanel } from './feedback';
+import { Toasts } from './toasts';
+import { MILESTONES, MilestoneTracker } from './milestones';
 
 export type ToolMode = 'inspect' | 'placeFood' | 'spawnPredator' | 'foundColony';
 
@@ -89,6 +91,37 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
   if (text !== undefined) e.textContent = text;
   return e;
 }
+
+/**
+ * The speed ladder, with the key that selects each rung.
+ *
+ * 20x and 50x are new. They were previously impossible to offer honestly:
+ * the engine scaled its step size with the multiplier, so a high setting
+ * silently degraded the simulation rather than speeding it up. Now that the
+ * step is capped, an hour of colony history in a minute is a real option —
+ * and at 150 sim-seconds to the day, that is what it takes to watch a colony
+ * boom, overshoot and crash inside a lunch break.
+ */
+const SPEED_STEPS: readonly [number, string][] = [
+  [0, '⏸'],
+  [1, '1×'],
+  [2, '2×'],
+  [5, '5×'],
+  [10, '10×'],
+  [20, '20×'],
+  [50, '50×'],
+];
+
+/**
+ * Keyboard layout.
+ *
+ * Digits belong to the tools: they are badged 1-4 on the bar, and a number
+ * row that picks a tool is the convention every game with a hotbar already
+ * taught the player. Speed steps along the ladder on `-` and `=` instead,
+ * which also reads better than jumping to a specific multiplier — you nudge
+ * it until the pace looks right rather than picking a number.
+ */
+const TOOL_ORDER: readonly ToolMode[] = ['inspect', 'placeFood', 'spawnPredator', 'foundColony'];
 
 function fmt(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : Math.round(n).toString();
@@ -225,11 +258,17 @@ export class HUD {
   private restartBtn!: HTMLButtonElement;
   private confirmingRestart = false;
   private speedButtons: HTMLButtonElement[] = [];
+  private speedLoadEl!: HTMLElement;
   private unsubscribers: (() => void)[] = [];
 
   private log!: ColonyLog;
   private intro!: Intro;
   private feedback!: FeedbackPanel;
+  readonly toasts = new Toasts();
+  readonly milestones = new MilestoneTracker();
+  private milestoneGridEl!: HTMLElement;
+  private milestoneCountEl!: HTMLElement;
+  private lastMilestoneCount = -1;
   /** Colony names survive here after a colony dies, so the log can still say
    * who collapsed. */
   private colonyNames = new Map<number, string>();
@@ -311,6 +350,7 @@ export class HUD {
     this.log?.dispose();
     this.intro?.dispose();
     this.feedback?.dispose();
+    this.toasts?.dispose();
     this.root.querySelector('.hud-root')?.remove();
   }
 
@@ -337,6 +377,7 @@ export class HUD {
     container.appendChild(this.intro.element);
     this.feedback = new FeedbackPanel(this.sim);
     container.appendChild(this.feedback.element);
+    container.appendChild(this.toasts.element);
     if (!hasSeenIntro()) this.intro.open();
 
     this.setActiveTool('inspect');
@@ -373,8 +414,41 @@ export class HUD {
     } else if (e.key.toLowerCase() === 'f') {
       e.preventDefault();
       this.openFeedback();
+    } else if (e.key >= '1' && e.key <= '4') {
+      const tool = TOOL_ORDER[Number(e.key) - 1];
+      if (tool) {
+        e.preventDefault();
+        this.setActiveTool(tool);
+      }
+    } else if (e.key === '-' || e.key === '_' || e.key === '=' || e.key === '+') {
+      e.preventDefault();
+      this.nudgeSpeed(e.key === '=' || e.key === '+' ? 1 : -1);
     }
   };
+
+  /**
+   * Step one rung along the speed ladder.
+   *
+   * Pause is rung zero, so stepping down from 1x pauses and stepping up from
+   * a pause resumes at 1x — which is what "slower" and "faster" mean at the
+   * ends of the range.
+   */
+  private nudgeSpeed(direction: 1 | -1) {
+    const current = this.sim.getSpeed();
+    let i = SPEED_STEPS.findIndex((sp) => sp[0] === current);
+    // A speed set from elsewhere may not sit exactly on a rung; snap to the
+    // nearest one before stepping so the first press isn't a no-op.
+    if (i < 0) {
+      i = SPEED_STEPS.reduce(
+        (best, sp, idx) =>
+          Math.abs(sp[0] - current) < Math.abs(SPEED_STEPS[best][0] - current) ? idx : best,
+        0,
+      );
+    }
+    const next = Math.min(SPEED_STEPS.length - 1, Math.max(0, i + direction));
+    this.sim.setSpeed(SPEED_STEPS[next][0]);
+    this.refreshSpeedButtons();
+  }
 
   // --- Stats -----------------------------------------------------------
 
@@ -410,7 +484,48 @@ export class HUD {
     this.deathListEl.appendChild(el('div', 'death-empty', 'Nobody has died yet.'));
     panel.appendChild(this.deathListEl);
 
+    panel.appendChild(this.buildMilestoneShelf());
+
     return panel;
+  }
+
+  /**
+   * A visible shelf of what there is to find.
+   *
+   * The toasts announce a milestone the moment it lands, then vanish — which
+   * is the right behaviour for a notification and the wrong one for a
+   * collection. Locked entries are shown as silhouettes with their hint
+   * readable but their name hidden: enough to suggest there is something
+   * there to go after, not so much that it is a checklist to grind.
+   */
+  private buildMilestoneShelf(): HTMLElement {
+    const wrap = el('div', 'ms-wrap');
+    const head = el('div', 'hud-subtitle small deaths-head');
+    head.appendChild(el('span', undefined, 'Milestones'));
+    this.milestoneCountEl = el('span', 'deaths-total', `0/${this.milestones.total}`);
+    head.appendChild(this.milestoneCountEl);
+    wrap.appendChild(head);
+
+    this.milestoneGridEl = el('div', 'ms-grid');
+    wrap.appendChild(this.milestoneGridEl);
+    this.renderMilestoneShelf();
+    return wrap;
+  }
+
+  private renderMilestoneShelf() {
+    const unlocked = this.milestones.unlockedIds;
+    if (this.lastMilestoneCount === unlocked.size && this.milestoneGridEl.childElementCount > 0) return;
+    this.lastMilestoneCount = unlocked.size;
+
+    this.milestoneGridEl.textContent = '';
+    for (const m of MILESTONES) {
+      const got = unlocked.has(m.id);
+      const cell = el('div', `ms-cell${got ? ' got' : ''}`, got ? m.icon : '?');
+      cell.title = got ? `${m.title} — ${m.blurb}` : 'Not yet found';
+      cell.setAttribute('aria-label', got ? m.title : 'Locked milestone');
+      this.milestoneGridEl.appendChild(cell);
+    }
+    this.milestoneCountEl.textContent = `${unlocked.size}/${this.milestones.total}`;
   }
 
   private updateStats(s: WorldSnapshot) {
@@ -438,6 +553,29 @@ export class HUD {
       .padStart(2, '0');
     set('clock', `Day ${day}, ${hh}:${mm}`);
     set('weather', `${WEATHER_ICON[s.weather] ?? ''} ${s.weather}`);
+
+    // Honest speed badge: if the engine hit its per-frame budget it is not
+    // actually delivering the multiplier on the button, and saying so beats
+    // letting someone wonder why 50x looks like 20x.
+    // Milestones are evaluated here rather than on the event bus because most
+    // of them are thresholds on world state ("fifty ants at once"), not
+    // moments — there is no event for "the population just crossed 50".
+    for (const earned of this.milestones.update(s, 1 / 60)) {
+      this.toasts.show({
+        icon: earned.icon,
+        title: earned.title,
+        body: earned.blurb,
+        tone: 'milestone',
+      });
+      this.renderMilestoneShelf();
+    }
+
+    const load = this.sim.getStepLoad();
+    const throttled = load.requested > 0 && load.taken < load.requested * 0.9;
+    this.speedLoadEl.classList.toggle('hidden', !throttled);
+    if (throttled) {
+      this.speedLoadEl.textContent = `⚠ ${Math.round((load.taken / load.requested) * 100)}%`;
+    }
 
     this.updateDeathList(s);
   }
@@ -665,29 +803,6 @@ export class HUD {
     const panel = el('div', 'hud-panel hud-settings hidden');
     this.settingsPanelEl = panel;
     toggle.addEventListener('click', () => panel.classList.toggle('hidden'));
-
-    panel.appendChild(el('div', 'hud-subtitle', 'Speed'));
-    const speedWrap = el('div', 'speed-list');
-    const speeds: [number, string][] = [
-      [0, '⏸'],
-      [1, '1×'],
-      [2, '2×'],
-      [5, '5×'],
-      [10, '10×'],
-    ];
-    for (const [mult, label] of speeds) {
-      const btn = el('button', 'speed-btn', label);
-      btn.dataset.speed = String(mult);
-      btn.addEventListener('click', () => {
-        this.sim.setSpeed(mult);
-        this.refreshSpeedButtons();
-      });
-      this.speedButtons.push(btn);
-      speedWrap.appendChild(btn);
-    }
-    panel.appendChild(speedWrap);
-    panel.appendChild(el('div', 'panel-hint', 'Space bar pauses and resumes.'));
-    this.refreshSpeedButtons();
 
     panel.appendChild(el('div', 'hud-subtitle', 'View'));
     const viewWrap = el('div', 'view-toggle');
@@ -931,15 +1046,61 @@ export class HUD {
       const btn = el('button', 'tool-btn');
       btn.type = 'button';
       btn.innerHTML = `<span class="tool-icon">${icon}</span><span class="tool-label">${label}</span>`;
-      btn.title = `${label} — ${TOOL_HINTS[mode]}`;
+      btn.title = `${label} (press ${tools.indexOf(tools.find((t) => t[0] === mode)!) + 1}) — ${TOOL_HINTS[mode]}`;
       btn.setAttribute('aria-label', label);
       btn.dataset.tool = mode;
       btn.addEventListener('click', () => this.setActiveTool(mode));
       this.toolButtons[mode] = btn;
       bar.appendChild(btn);
     }
+    // Number-key hints on the tools, so the shortcuts are discoverable
+    // without reading a manual.
+    tools.forEach(([mode], i) => {
+      const btn = this.toolButtons[mode];
+      if (btn) btn.appendChild(el('span', 'tool-key', String(i + 1)));
+    });
+
     this.toolHintEl = el('div', 'tool-hint');
-    wrap.append(bar, this.toolHintEl);
+    wrap.append(bar, this.buildSpeedBar(), this.toolHintEl);
+    return wrap;
+  }
+
+  /**
+   * Speed lives on the main bar, not behind the gear.
+   *
+   * A colony takes real time to do anything interesting, so the speed control
+   * is the single most-reached-for thing in the whole UI. Burying it two
+   * clicks deep in Settings meant most people never found it and concluded
+   * that nothing happens in this simulator.
+   */
+  private buildSpeedBar(): HTMLElement {
+    const wrap = el('div', 'speed-bar');
+    wrap.setAttribute('role', 'group');
+    wrap.setAttribute('aria-label', 'Simulation speed');
+
+    for (const [mult, label] of SPEED_STEPS) {
+      const btn = el('button', 'speed-chip', label);
+      btn.type = 'button';
+      btn.dataset.speed = String(mult);
+      btn.title = mult === 0 ? 'Pause (Space)' : `${label} speed — step with - and =`;
+      btn.addEventListener('click', () => {
+        this.sim.setSpeed(mult);
+        this.refreshSpeedButtons();
+      });
+      this.speedButtons.push(btn);
+      wrap.appendChild(btn);
+    }
+
+    // Shown only when the sim can't keep up with the requested multiplier, so
+    // a laptop pinned at 50x says so instead of pretending.
+    this.speedLoadEl = el('span', 'speed-load hidden', '');
+    this.speedLoadEl.title = 'The simulation is running slower than this setting asks for.';
+    wrap.appendChild(this.speedLoadEl);
+    // Light up the current rung immediately. Without this the bar opens with
+    // nothing highlighted and reads as "no speed selected" until the first
+    // interaction, which is a poor first impression of the control people are
+    // meant to reach for most.
+    this.refreshSpeedButtons();
     return wrap;
   }
 

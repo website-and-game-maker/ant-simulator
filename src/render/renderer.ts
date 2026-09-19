@@ -4,6 +4,7 @@ import type { Vec2 } from '../sim/vec2';
 import { Camera } from './camera';
 import { bakeTerrain, drawTerrainDetail, drawWetness } from './terrainBaker';
 import { drawAnt, drawFood, drawPredator, type FoodKind, type PredatorKind } from './sprites';
+import { Effects } from './effects';
 
 interface Raindrop {
   x: number;
@@ -119,6 +120,11 @@ export class Renderer {
   /** 0..1 fade so the minimap doesn't pop in and out at the threshold. */
   private minimapFade = 0;
   private grainPattern: CanvasPattern | null = null;
+  /** Cosmetic particle + shake layer. Public so main.ts can wire sim events
+   * straight to it without the renderer having to mirror every one. */
+  readonly effects = new Effects();
+  private followId: number | null = null;
+  private followLostT = 0;
   /** Screen rects the HUD is occupying; the minimap keeps out of them. */
   private reservedRects: ScreenRect[] = [];
   /** Tiny offscreen canvas (one pixel per pheromone cell) used to build the
@@ -161,6 +167,57 @@ export class Renderer {
 
   private w2s(p: Vec2): Vec2 {
     return this.camera.worldToScreen(p, this.cssW, this.cssH);
+  }
+
+  /**
+   * Lock the camera onto one ant and ride along.
+   *
+   * Watching a single ant's whole errand — out along a trail, onto the food,
+   * back to the nest, fed by a nestmate — is the moment the colony stops being
+   * a swarm of dots and turns into a thousand individuals. But an ant is a few
+   * pixels wide and never stops moving, so manually keeping one in frame is
+   * impossible. This makes it one click.
+   */
+  followAnt(id: number | null) {
+    this.followId = id;
+    this.followLostT = 0;
+  }
+
+  getFollowId(): number | null {
+    return this.followId;
+  }
+
+  stopFollowing() {
+    this.followId = null;
+  }
+
+  /** The followed ant in the latest snapshot, if it is still alive. */
+  private followTarget(snapshot: WorldSnapshot): AntSnapshot | null {
+    if (this.followId === null) return null;
+    return snapshot.ants.find((a) => a.id === this.followId) ?? null;
+  }
+
+  /**
+   * Ease the camera toward the followed ant rather than pinning it dead
+   * centre. A hard lock makes the whole world jitter with every step the ant
+   * takes; a spring lets the ant drift within the frame and the ground stay
+   * still, which is far easier to watch.
+   */
+  private updateFollow(snapshot: WorldSnapshot, dt: number) {
+    if (this.followId === null) return;
+    const target = this.followTarget(snapshot);
+    if (!target) {
+      // The ant died. Hold position for a beat so the death is visible, then
+      // release — yanking the camera away at the instant of death hides the
+      // one thing the viewer was watching for.
+      this.followLostT += dt;
+      if (this.followLostT > 1.6) this.followId = null;
+      return;
+    }
+    this.followLostT = 0;
+    const k = 1 - Math.pow(0.0001, dt); // critically-damped-ish follow
+    this.camera.x += (target.pos.x - this.camera.x) * k;
+    this.camera.y += (target.pos.y - this.camera.y) * k;
   }
 
   /** Called on pointer move. Pass null when the pointer leaves the canvas. */
@@ -222,6 +279,8 @@ export class Renderer {
     this.clock += dtSeconds;
     this.lastDt = dtSeconds;
     this.lastSnapshot = snapshot;
+    this.camera.stepMomentum(dtSeconds);
+    this.updateFollow(snapshot, dtSeconds);
     const profile = this.sim.getProfile();
     const view = this.sim.getView();
 
@@ -239,12 +298,27 @@ export class Renderer {
 
     this.camera.clampToWorld(snapshot.width, snapshot.height, this.cssW, this.cssH);
 
+    // Effects are cosmetic, so they run on real time and keep moving even
+    // while the simulation is paused — a fight that just happened still
+    // finishes throwing its sparks.
+    this.effects.setBudget({
+      density: profile.render.maxParticles >= 200 ? 1 : profile.render.maxParticles >= 90 ? 0.6 : 0.3,
+      shake: profile.render.softShadows,
+    });
+    this.effects.update(dtSeconds);
+
     this.wctx.save();
     this.wctx.clearRect(0, 0, this.cssW, this.cssH);
     this.fctx.clearRect(0, 0, this.cssW, this.cssH);
 
+    // Screen shake is a canvas translate, not a camera move: the camera feeds
+    // hit-testing, and a click during a shake has to land where it was aimed.
+    const shake = this.effects.shakeOffset;
+    if (shake.x !== 0 || shake.y !== 0) this.wctx.translate(shake.x, shake.y);
+
     if (view === 'surface') {
       this.renderSurface(snapshot, profile);
+      this.effects.render(this.wctx, (p) => this.w2s(p), this.camera.zoom);
     } else {
       this.renderUnderground(snapshot);
     }
@@ -253,8 +327,58 @@ export class Renderer {
 
     this.renderWeatherFx(snapshot, dtSeconds, profile.render.weatherParticles, profile.render.maxParticles);
     this.renderLighting(snapshot);
+    if (view === 'surface') this.drawFollowIndicator(snapshot);
     this.drawHoverHighlight();
     if (this.minimapFade > 0.01) this.renderMinimap(snapshot, this.minimapFade);
+  }
+
+  /**
+   * Mark the ant the camera is riding, and say how to get off.
+   *
+   * Without this, follow mode is indistinguishable from the camera having
+   * developed a mind of its own — the ground slides around and nothing
+   * explains why.
+   */
+  private drawFollowIndicator(snapshot: WorldSnapshot) {
+    if (this.followId === null) return;
+    const ctx = this.fctx;
+    const target = snapshot.ants.find((a) => a.id === this.followId);
+
+    if (target) {
+      const s = this.w2s(target.pos);
+      const pulse = 1 + Math.sin(this.clock * 4) * 0.12;
+      const r = Math.max(14, 18 * this.camera.zoom) * pulse;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(143, 209, 102, 0.9)';
+      ctx.lineWidth = 2;
+      // A broken ring reads as a targeting reticle rather than a selection
+      // halo, which keeps it distinct from the hover highlight.
+      ctx.setLineDash([r * 0.5, r * 0.34]);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, r, this.clock * 1.1, this.clock * 1.1 + Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    const label = target ? 'Following this ant · Esc to release' : 'It died. Releasing the camera…';
+    ctx.save();
+    ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
+    const w = ctx.measureText(label).width + 22;
+    const x = (this.cssW - w) / 2;
+    const y = 16;
+    ctx.fillStyle = 'rgba(12, 18, 14, 0.78)';
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, 26, 13);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(143, 209, 102, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = target ? '#cfe8bd' : '#e0a95c';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, this.cssW / 2, y + 13);
+    ctx.restore();
   }
 
   /** A ring around whatever the pointer is over, so it's obvious what a click

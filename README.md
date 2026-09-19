@@ -126,13 +126,39 @@ diagram, positioned at each nest.
 
 ## Controls
 
-- **Drag** to pan the camera, **scroll wheel / pinch** to zoom.
-- A bottom tool bar switches what a click on the ground does: **Inspect**
-  (click an ant or nest for its stats), **Place food**, **Spawn predator**,
-  or **Found colony** (drop a rogue new colony wherever you click).
-- The gear icon opens **Settings**: processing power tier, simulation speed
-  (pause/1×/2×/5×/10×), and the surface/underground view toggle.
-- Click a colony in the leaderboard panel to snap the camera to its nest.
+| | |
+| --- | --- |
+| **Drag** the ground | Pan. Flick and release to send the camera coasting. |
+| **W A S D** / arrows | Pan from the keyboard. |
+| **Scroll** / pinch | Zoom. Stops when the whole world is on screen. |
+| **Click an ant** | Inspect it **and ride along** — the camera follows that ant. **Esc** lets go. |
+| **1 2 3 4** | Tools: 🔍 inspect · 🌰 drop food · 🕷️ spawn a predator · 👑 found a colony. |
+| **-** and **=** | Step the speed ladder down and up: 1× → 2× → 5× → 10× → 20× → 50×. |
+| **Space** | Pause / resume. |
+| **?** / **F** | Reopen the explainer / send feedback. |
+
+Click a colony in the leaderboard to snap the camera to its nest. The gear
+holds the processing-power tier and the surface/underground toggle.
+
+### On speed
+
+At 150 sim-seconds to the day, **50× puts a whole day of colony history in
+about three seconds** — which is what it takes to actually watch a colony
+boom, outgrow its food supply, crash, and recover.
+
+The step size is capped independently of the multiplier, so a fast run is the
+*same* simulation as a slow one rather than a coarser one. (It used to divide
+one frame's worth of time by a fixed substep count, which meant 10× quietly
+became a different, worse simulation: ants striding over food and through
+rocks.) Where a machine can't deliver the requested multiplier the speed bar
+says so with a ⚠ and the percentage actually achieved, instead of pretending.
+
+### Milestones
+
+Twelve of them, listed at the bottom of the stats panel and unlocked by things
+the colony does on its own — first death, fifty ants, a nuptial flight, a
+colony founded by one of your own queens, a rival wiped out. Locked entries
+show as silhouettes. Progress is kept per browser.
 - **`F`** (or the 💬 button) opens the feedback panel; **`?`** reopens the
   explainer; **Space** pauses.
 
