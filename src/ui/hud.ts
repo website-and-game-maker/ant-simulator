@@ -10,6 +10,7 @@ import { Intro, hasSeenIntro } from './intro';
 import { FeedbackPanel } from './feedback';
 import { Toasts } from './toasts';
 import { MILESTONES, MilestoneTracker } from './milestones';
+import { SpeedSlider } from './speedSlider';
 
 export type ToolMode = 'inspect' | 'placeFood' | 'spawnPredator' | 'foundColony';
 
@@ -257,8 +258,7 @@ export class HUD {
   private settingsWrapEl!: HTMLElement;
   private restartBtn!: HTMLButtonElement;
   private confirmingRestart = false;
-  private speedButtons: HTMLButtonElement[] = [];
-  private speedLoadEl!: HTMLElement;
+  private speedSlider!: SpeedSlider;
   private unsubscribers: (() => void)[] = [];
 
   private log!: ColonyLog;
@@ -407,7 +407,7 @@ export class HUD {
     if (e.code === 'Space') {
       e.preventDefault();
       this.sim.togglePause();
-      this.refreshSpeedButtons();
+      this.syncSpeedUI();
     } else if (e.key === '?') {
       e.preventDefault();
       this.intro.open();
@@ -447,7 +447,7 @@ export class HUD {
     }
     const next = Math.min(SPEED_STEPS.length - 1, Math.max(0, i + direction));
     this.sim.setSpeed(SPEED_STEPS[next][0]);
-    this.refreshSpeedButtons();
+    this.syncSpeedUI();
   }
 
   // --- Stats -----------------------------------------------------------
@@ -456,23 +456,49 @@ export class HUD {
     const panel = el('div', 'hud-panel hud-stats');
     panel.style.pointerEvents = 'auto';
 
-    const row = (key: string, icon: string, label: string) => {
-      const r = el('div', 'stat-row');
-      r.append(el('span', 'stat-icon', icon), el('span', 'stat-label', label), (this.statsEls[key] = el('span', 'stat-value', '—')));
-      panel.appendChild(r);
-      return r;
-    };
+    const titleRow = el('div', 'hud-title-row');
+    titleRow.appendChild(el('div', 'hud-title', '🐜 Formicarium'));
+    // FPS used to sit in the stats list as a full labelled row, level with
+    // "Ants" and "Colonies" — a frame-rate counter given the same visual
+    // weight as the thing the game is actually about. It's still worth
+    // having on screen (a slow machine wants to know why), just tucked into
+    // the corner where a diagnostic belongs rather than the scoreboard.
+    this.statsEls['fps'] = el('span', 'hud-fps', '—');
+    titleRow.appendChild(this.statsEls['fps']);
+    panel.appendChild(titleRow);
 
-    panel.appendChild(el('div', 'hud-title', '🐜 Formicarium'));
-    row('ants', '🐜', 'Ants');
-    row('larvae', '🥚', 'Larvae');
-    row('colonies', '🏰', 'Colonies');
-    row('predators', '🕷️', 'Predators');
-    row('births', '📈', 'Births/min');
-    row('deaths', '📉', 'Deaths/min');
-    row('clock', '🕐', 'Sim time');
-    row('weather', '🌤️', 'Weather');
-    row('fps', '⚡', 'FPS');
+    // The headline number: not a row among rows, a scoreboard digit. This is
+    // the one figure a glance at the panel should answer first.
+    const headline = el('div', 'stat-headline');
+    this.statsEls['ants'] = el('span', 'stat-headline-value', '—');
+    headline.append(this.statsEls['ants'], el('span', 'stat-headline-label', 'ants alive'));
+    panel.appendChild(headline);
+
+    // Everything else: a compact 2-up grid of small stat chips instead of a
+    // tall single-column list of icon/label/value rows. Same information,
+    // roughly half the height, and it reads as a stat card rather than a
+    // console dump.
+    const grid = el('div', 'stat-grid');
+    const chip = (key: string, icon: string, label: string) => {
+      const c = el('div', 'stat-chip');
+      const value = el('span', 'stat-chip-value', '—');
+      this.statsEls[key] = value;
+      c.append(el('span', 'stat-chip-icon', icon), value);
+      c.title = label;
+      grid.appendChild(c);
+      return c;
+    };
+    chip('larvae', '🥚', 'Larvae in the nest');
+    chip('colonies', '🏰', 'Colonies alive');
+    chip('predators', '🕷️', 'Predators on the map');
+    chip('netgrowth', '📈', 'Births minus deaths per minute');
+    panel.appendChild(grid);
+
+    const timeRow = el('div', 'stat-timerow');
+    this.statsEls['clock'] = el('span', 'stat-time', '—');
+    this.statsEls['weather'] = el('span', 'stat-weather', '—');
+    timeRow.append(this.statsEls['clock'], this.statsEls['weather']);
+    panel.appendChild(timeRow);
 
     const head = el('div', 'hud-subtitle small deaths-head');
     head.appendChild(el('span', undefined, 'How they died'));
@@ -520,7 +546,11 @@ export class HUD {
     this.milestoneGridEl.textContent = '';
     for (const m of MILESTONES) {
       const got = unlocked.has(m.id);
-      const cell = el('div', `ms-cell${got ? ' got' : ''}`, got ? m.icon : '?');
+      // Locked cells used to show a literal "?" — which reads as an error
+      // state or an unfinished feature, not a thing waiting to be found. An
+      // empty dashed slot is the same "not yet" without looking broken —
+      // it's the trophy-case convention, not the placeholder-text one.
+      const cell = el('div', `ms-cell${got ? ' got' : ''}`, got ? m.icon : '');
       cell.title = got ? `${m.title} — ${m.blurb}` : 'Not yet found';
       cell.setAttribute('aria-label', got ? m.title : 'Locked milestone');
       this.milestoneGridEl.appendChild(cell);
@@ -537,9 +567,12 @@ export class HUD {
     set('larvae', fmt(s.stats.totalLarvae));
     set('colonies', fmt(s.stats.totalColonies));
     set('predators', fmt(s.stats.totalPredators));
-    set('births', fmt(s.stats.birthsPerMinute));
-    set('deaths', fmt(s.stats.deathsPerMinute));
-    set('fps', Math.round(s.stats.fps).toString());
+    // Births and deaths per minute used to be two separate full rows. One net
+    // figure, signed, says the same thing a glance actually needs — "is the
+    // colony growing" — without asking for mental subtraction.
+    const net = Math.round(s.stats.birthsPerMinute - s.stats.deathsPerMinute);
+    set('netgrowth', `${net > 0 ? '+' : ''}${net}/min`);
+    set('fps', `⚡${Math.round(s.stats.fps)}`);
 
     // The clock starts at midday, so the day number has to be offset by half a
     // cycle — without it the date rolled over at noon and you'd watch "Day 2"
@@ -572,10 +605,11 @@ export class HUD {
 
     const load = this.sim.getStepLoad();
     const throttled = load.requested > 0 && load.taken < load.requested * 0.9;
-    this.speedLoadEl.classList.toggle('hidden', !throttled);
-    if (throttled) {
-      this.speedLoadEl.textContent = `⚠ ${Math.round((load.taken / load.requested) * 100)}%`;
-    }
+    this.speedSlider.setThrottle(throttled ? Math.round((load.taken / load.requested) * 100) : null);
+    // Cheap and self-correcting: keeps the slider truthful even if the
+    // simulation's speed is ever changed by something other than the slider
+    // or the keyboard shortcuts.
+    this.syncSpeedUI();
 
     this.updateDeathList(s);
   }
@@ -774,6 +808,8 @@ export class HUD {
     const wrap = el('div', 'hud-topright');
     wrap.style.pointerEvents = 'auto';
 
+    const icons = el('div', 'hud-topright-icons');
+
     const help = el('button', 'hud-help-btn');
     help.type = 'button';
     help.innerHTML = '<span class="hud-help-mark">?</span><span class="hud-help-label">How it works</span>';
@@ -789,7 +825,18 @@ export class HUD {
     feedbackBtn.setAttribute('aria-label', 'Send feedback');
     feedbackBtn.addEventListener('click', () => this.openFeedback());
 
-    wrap.append(help, feedbackBtn, this.buildSettingsPanel());
+    icons.append(help, feedbackBtn, this.buildSettingsPanel());
+
+    // The speed control docks under the icon row rather than in the bottom
+    // toolbar. A vertical slider has a position and a direction — "up" is
+    // unmistakably "faster" — which a row of pill buttons never quite
+    // communicated, and it frees the bottom bar to be just the four tools.
+    this.speedSlider = new SpeedSlider({
+      steps: SPEED_STEPS.map(([multiplier, label]) => ({ multiplier, label })),
+      onChange: (multiplier) => this.sim.setSpeed(multiplier),
+    });
+
+    wrap.append(icons, this.speedSlider.element);
     return wrap;
   }
 
@@ -870,9 +917,12 @@ export class HUD {
     wrap.querySelectorAll<HTMLButtonElement>('.tier-btn').forEach((b) => b.classList.toggle('active', b.dataset.tier === active));
   }
 
-  private refreshSpeedButtons() {
-    const current = this.sim.isPaused() ? 0 : this.sim.getSpeed();
-    this.speedButtons.forEach((b) => b.classList.toggle('active', Number(b.dataset.speed) === current));
+  /** The simulation's speed is the single source of truth; this pulls the
+   * slider's displayed position into line with it. Called after anything
+   * that can change speed through a path other than dragging the slider
+   * itself — Space, the -/= shortcuts, or a fresh boot. */
+  private syncSpeedUI() {
+    this.speedSlider.syncFromMultiplier(this.sim.getSpeed());
   }
 
   // --- Inspector -----------------------------------------------------------
@@ -1061,46 +1111,7 @@ export class HUD {
     });
 
     this.toolHintEl = el('div', 'tool-hint');
-    wrap.append(bar, this.buildSpeedBar(), this.toolHintEl);
-    return wrap;
-  }
-
-  /**
-   * Speed lives on the main bar, not behind the gear.
-   *
-   * A colony takes real time to do anything interesting, so the speed control
-   * is the single most-reached-for thing in the whole UI. Burying it two
-   * clicks deep in Settings meant most people never found it and concluded
-   * that nothing happens in this simulator.
-   */
-  private buildSpeedBar(): HTMLElement {
-    const wrap = el('div', 'speed-bar');
-    wrap.setAttribute('role', 'group');
-    wrap.setAttribute('aria-label', 'Simulation speed');
-
-    for (const [mult, label] of SPEED_STEPS) {
-      const btn = el('button', 'speed-chip', label);
-      btn.type = 'button';
-      btn.dataset.speed = String(mult);
-      btn.title = mult === 0 ? 'Pause (Space)' : `${label} speed — step with - and =`;
-      btn.addEventListener('click', () => {
-        this.sim.setSpeed(mult);
-        this.refreshSpeedButtons();
-      });
-      this.speedButtons.push(btn);
-      wrap.appendChild(btn);
-    }
-
-    // Shown only when the sim can't keep up with the requested multiplier, so
-    // a laptop pinned at 50x says so instead of pretending.
-    this.speedLoadEl = el('span', 'speed-load hidden', '');
-    this.speedLoadEl.title = 'The simulation is running slower than this setting asks for.';
-    wrap.appendChild(this.speedLoadEl);
-    // Light up the current rung immediately. Without this the bar opens with
-    // nothing highlighted and reads as "no speed selected" until the first
-    // interaction, which is a poor first impression of the control people are
-    // meant to reach for most.
-    this.refreshSpeedButtons();
+    wrap.append(bar, this.toolHintEl);
     return wrap;
   }
 
