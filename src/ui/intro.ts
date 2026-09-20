@@ -222,7 +222,7 @@ const PANES: PaneSpec[] = [
     lines: [
       { icon: '\ud83d\udd90\ufe0f', text: '<b>Click and drag</b> the ground to pan \u2014 or use <b>WASD</b> / the arrow keys. Scroll or pinch to zoom. Flick and let go to send the camera coasting.' },
       { icon: '\ud83c\udfa5', text: '<b>Click any ant to ride along with it.</b> The camera follows that one ant through its whole errand \u2014 out, onto the food, home again. <b>Esc</b> lets go.' },
-      { icon: '\u26a1', text: 'Speed lives on the bar at the bottom: <b>1\u00d7 to 50\u00d7</b>. Tap <b>-</b> and <b>=</b> to go slower and faster, <b>Space</b> to pause. At 50\u00d7 a whole day of colony history takes a few seconds \u2014 that is how you watch a boom and a crash.' },
+      { icon: '\u26a1', text: 'Speed is the vertical slider, top right: <b>1\u00d7 to 50\u00d7</b>. Drag it, click a tick, or tap <b>-</b> and <b>=</b> \u2014 <b>Space</b> pauses. At 50\u00d7 a whole day of colony history takes a few seconds, which is how you watch a boom and a crash.' },
       { icon: '\ud83e\uddf0', text: 'Tool bar: <b>1</b> \ud83d\udd0d inspect \u00b7 <b>2</b> \ud83c\udf30 drop food \u00b7 <b>3</b> \ud83d\udd77\ufe0f spawn a predator \u00b7 <b>4</b> \ud83d\udc51 found a rogue colony. Pick one, then click the ground.' },
       { icon: '\ud83c\udfc6', text: 'There are <b>twelve milestones</b> hidden in the bottom of the stats panel. Nothing is scripted \u2014 each one is something the colony has to actually do.' },
       { icon: '💬', text: 'Found a bug, or want the colonies to do something they don\u2019t? The <b>\ud83d\udcac</b> button (or <b>F</b>) files it, with the world state attached so it can be reproduced.' },

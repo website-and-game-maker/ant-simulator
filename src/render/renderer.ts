@@ -59,12 +59,12 @@ const TASK_BLURB: Record<AntSnapshot['task'], string> = {
  * you read a colony at a glance, so they're preserved here rather than drawing
  * every ant the same size and relying on colour. */
 const ANT_BODY_LENGTH: Record<AntSnapshot['caste'], number> = {
-  larva: 4.2,
-  worker: 6,
-  soldier: 8.2,
-  queen: 10.5,
-  drone: 7.2,
-  alateQueen: 9.2,
+  larva: 4.8,
+  worker: 7,
+  soldier: 9.6,
+  queen: 12.2,
+  drone: 8.4,
+  alateQueen: 10.8,
 };
 
 const PREDATOR_BODY_LENGTH: Record<PredatorSnapshot['kind'], number> = {

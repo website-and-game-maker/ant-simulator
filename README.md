@@ -133,7 +133,8 @@ diagram, positioned at each nest.
 | **Scroll** / pinch | Zoom. Stops when the whole world is on screen. |
 | **Click an ant** | Inspect it **and ride along** — the camera follows that ant. **Esc** lets go. |
 | **1 2 3 4** | Tools: 🔍 inspect · 🌰 drop food · 🕷️ spawn a predator · 👑 found a colony. |
-| **-** and **=** | Step the speed ladder down and up: 1× → 2× → 5× → 10× → 20× → 50×. |
+| **Drag the slider** (top right) | Set speed: pause up through 1× → 2× → 5× → 10× → 20× → 50×. Click a tick to jump straight there. |
+| **-** and **=** | Step the speed slider down and up from the keyboard. |
 | **Space** | Pause / resume. |
 | **?** / **F** | Reopen the explainer / send feedback. |
 
@@ -150,7 +151,7 @@ The step size is capped independently of the multiplier, so a fast run is the
 *same* simulation as a slow one rather than a coarser one. (It used to divide
 one frame's worth of time by a fixed substep count, which meant 10× quietly
 became a different, worse simulation: ants striding over food and through
-rocks.) Where a machine can't deliver the requested multiplier the speed bar
+rocks.) Where a machine can't deliver the requested multiplier the slider
 says so with a ⚠ and the percentage actually achieved, instead of pretending.
 
 ### Milestones

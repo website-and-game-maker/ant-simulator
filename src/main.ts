@@ -17,7 +17,18 @@ const renderer = new Renderer(worldCanvas, fxCanvas, sim);
 void preloadSprites();
 
 /** Zoom level that makes individual ants clearly readable as ants. */
-const COLONY_VIEW_ZOOM = 2.2;
+/**
+ * Zoom level the camera opens on.
+ *
+ * This used to be 2.2, which at a typical 1440-wide window put a worker ant
+ * at about 13 screen pixels — technically visible, but surrounded by so much
+ * plain dirt that the opening view read as an empty beach with a few dust
+ * specks on it rather than a colony of creatures. 3.4 puts a worker closer to
+ * 20px and, more importantly, shrinks how much bare ground surrounds the
+ * nest at open, which is what actually drives the "empty and boring" read —
+ * it's a composition problem as much as a size one.
+ */
+const COLONY_VIEW_ZOOM = 3.4;
 
 /**
  * Open looking at a living colony instead of the whole world. Framing the
