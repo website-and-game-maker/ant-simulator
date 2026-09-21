@@ -256,6 +256,7 @@ export class HUD {
   private toolHintTimer = 0;
   private settingsPanelEl!: HTMLElement;
   private settingsWrapEl!: HTMLElement;
+  private settingsBackdropEl!: HTMLElement;
   private restartBtn!: HTMLButtonElement;
   private confirmingRestart = false;
   private speedSlider!: SpeedSlider;
@@ -370,6 +371,15 @@ export class HUD {
     container.appendChild(left);
 
     container.appendChild(this.buildTopRight());
+    // A sibling of the top-right column rather than a child of it: the
+    // dismiss-on-outside-tap handler below already treats anything outside
+    // `settingsWrapEl` as "outside", and nesting the backdrop inside would
+    // have quietly defeated that. It sits above the stats/toolbar/inspector
+    // panels but under the settings flyout itself (see the z-index comment
+    // on `.hud-settings-backdrop`), so on a phone-width screen it's obvious
+    // that the panel now sitting over the stats column is a dismissable
+    // overlay rather than a second, half-hidden panel.
+    container.appendChild(this.settingsBackdropEl);
     container.appendChild(this.buildInspector());
     container.appendChild(this.buildToolbar());
 
@@ -396,7 +406,10 @@ export class HUD {
 
     const onDocPointerDown = (e: PointerEvent) => {
       if (this.settingsPanelEl.classList.contains('hidden')) return;
-      if (!this.settingsWrapEl.contains(e.target as Node)) this.settingsPanelEl.classList.add('hidden');
+      if (!this.settingsWrapEl.contains(e.target as Node)) {
+        this.settingsPanelEl.classList.add('hidden');
+        this.settingsBackdropEl.classList.add('hidden');
+      }
     };
     document.addEventListener('pointerdown', onDocPointerDown);
     this.unsubscribers.push(() => document.removeEventListener('pointerdown', onDocPointerDown));
@@ -849,7 +862,18 @@ export class HUD {
     toggle.title = 'Speed, view and graphics settings';
     const panel = el('div', 'hud-panel hud-settings hidden');
     this.settingsPanelEl = panel;
-    toggle.addEventListener('click', () => panel.classList.toggle('hidden'));
+    // On a phone-width screen the panel is wide enough to spill over the
+    // stats column, so a dimmer goes behind it — otherwise it just looks
+    // like the ants-alive count silently vanished. `settingsBackdropEl` is
+    // appended as a sibling of the top-right column by `build()`, not nested
+    // here, so the outside-tap-to-close handler in `wireEvents` treats a tap
+    // on it as "outside" and dismisses the panel.
+    this.settingsBackdropEl = el('div', 'hud-settings-backdrop hidden');
+    toggle.addEventListener('click', () => {
+      const opening = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !opening);
+      this.settingsBackdropEl.classList.toggle('hidden', !opening);
+    });
 
     panel.appendChild(el('div', 'hud-subtitle', 'View'));
     const viewWrap = el('div', 'view-toggle');

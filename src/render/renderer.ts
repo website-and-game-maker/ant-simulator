@@ -365,11 +365,22 @@ export class Renderer {
     ctx.save();
     ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
     const w = ctx.measureText(label).width + 22;
+    const h = 26;
     const x = (this.cssW - w) / 2;
-    const y = 16;
+    let y = 16;
+    // Centered-at-top is only safe on a screen wide enough that the pill's
+    // reach doesn't cross into the top-right icon cluster — true on a
+    // desktop window, not on a phone-width or short-landscape one, where the
+    // two used to overlap and bury half the label under the settings/help
+    // buttons. Drop below the cluster instead of guessing a breakpoint, the
+    // same way the minimap already sidesteps whatever the HUD is covering.
+    const topRight = this.reservedRects.find((r) => r.x + r.w >= this.cssW - 4 && r.y <= h + y);
+    if (topRight && Renderer.rectsOverlap({ x, y, w, h }, topRight)) {
+      y = topRight.y + topRight.h + 8;
+    }
     ctx.fillStyle = 'rgba(12, 18, 14, 0.78)';
     ctx.beginPath();
-    ctx.roundRect(x, y, w, 26, 13);
+    ctx.roundRect(x, y, w, h, 13);
     ctx.fill();
     ctx.strokeStyle = 'rgba(143, 209, 102, 0.5)';
     ctx.lineWidth = 1;
@@ -377,7 +388,7 @@ export class Renderer {
     ctx.fillStyle = target ? '#cfe8bd' : '#e0a95c';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, this.cssW / 2, y + 13);
+    ctx.fillText(label, x + w / 2, y + h / 2);
     ctx.restore();
   }
 
