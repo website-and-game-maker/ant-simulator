@@ -593,11 +593,11 @@ body {
 }
 /* A sibling of `.hud-topright`, not a child of `.hud-settings-wrap` — see the
    comment where it's appended in hud.ts. Transparent and click-through by
-   default: at desktop widths the settings flyout has room to open without
-   touching another panel, so there is nothing to dim. Only past the phone
-   breakpoint below does it get a fill, where the panel is wide enough to
-   spill over the stats column and needs to visibly announce "everything
-   behind me is temporarily inactive" instead of just quietly covering it.
+   default: on a desktop-sized window the settings flyout has room to open
+   without touching another panel, so there is nothing to dim. On a phone
+   (narrow, or short in landscape) the flyout lands on top of the stats column
+   or the inspector, so there it gets a fill that announces "everything behind
+   me is temporarily inactive" instead of quietly covering it.
    z-index 25 sits above the stats/toolbar/inspector panels (10/20/12) but
    below `.hud-topright` (30), which is what keeps the gear button and the
    settings panel itself uncovered. */
@@ -608,8 +608,11 @@ body {
   background: transparent;
   pointer-events: none;
 }
-.hud-settings-backdrop.hidden {
-  display: none;
+@media (max-width: 700px), (max-height: 560px) {
+  .hud-settings-backdrop {
+    background: rgba(6, 10, 8, 0.55);
+    pointer-events: auto;
+  }
 }
 .tier-list,
 .view-toggle {
@@ -1146,12 +1149,6 @@ body {
     width: min(320px, 86vw);
     right: 0;
     max-height: 62vh;
-  }
-  .hud-settings-backdrop:not(.hidden) {
-    background: rgba(6, 10, 8, 0.55);
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
-    pointer-events: auto;
   }
   .hud-inspector {
     width: min(320px, 86vw);
@@ -1744,16 +1741,17 @@ body {
 
 /* A phone in landscape (390-430px of height is typical) is short enough that
    the top-right column — icon row plus the speed dock beneath it — could
-   still grow tall enough to run into the top of the bottom-right inspector
-   panel and render the speed track directly over the colony status text.
-   Shrinking the column further and giving the inspector a fixed `top` below
-   it (instead of letting both float in from opposite edges and hope they
-   never meet) makes the split explicit instead of implicit. Placed after the
-   (max-height: 700px) block above so its narrower .speed-track wins at equal
+   run into the bottom-right inspector panel and render the speed track
+   directly over the colony status text. The inspector is moved left of the
+   dock column instead, so the two are side by side by construction and stay
+   clear however tall the dock gets (its throttle badge adds height). The
+   track stays at 100px or more: the stops are 24px hit boxes, and on a
+   shorter track each one covers its neighbour's dot. Placed after the
+   (max-height: 700px) block above so its .speed-track wins at equal
    specificity. */
 @media (max-height: 560px) {
   .speed-track {
-    height: 70px;
+    height: 100px;
   }
   .speed-endlabel {
     display: none;
@@ -1772,10 +1770,11 @@ body {
     height: 34px;
     font-size: 15px;
   }
+  /* Dock width (46) + its 14px inset + a 10px gap. The width cap keeps the
+     card clear of the stats column on the narrowest screens. */
   .hud-inspector {
-    top: 184px;
-    bottom: var(--toolbar-reserve);
-    max-height: none;
+    right: 70px;
+    max-width: calc(100vw - 270px);
   }
 }
 
