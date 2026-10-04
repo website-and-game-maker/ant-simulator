@@ -488,11 +488,20 @@ let reservedRectTimer = 0;
 
 function syncReservedRects() {
   const rects: ScreenRect[] = [];
-  const selector = '.hud-panel, .hud-toolbar-wrap, .hud-topright, .hud-settings-wrap';
+  // The top-right column is reported as its two parts: as one tall rect it hid
+  // the free space beside the icon row from anything placed around it.
+  const selector = '.hud-panel, .hud-toolbar-wrap, .hud-topright-icons, .speed-dock, .hud-settings-wrap';
   for (const el of Array.from(uiRoot.querySelectorAll<HTMLElement>(selector))) {
     if (el.classList.contains('hidden') || el.offsetParent === null) continue;
     const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) rects.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+    // Panels inside the scrolling left column report their full layout box,
+    // including the part scrolled out of sight; only the visible part is covered.
+    const clip = el.closest('.hud-left')?.getBoundingClientRect();
+    const left = clip ? Math.max(r.left, clip.left) : r.left;
+    const top = clip ? Math.max(r.top, clip.top) : r.top;
+    const right = clip ? Math.min(r.right, clip.right) : r.right;
+    const bottom = clip ? Math.min(r.bottom, clip.bottom) : r.bottom;
+    if (right > left && bottom > top) rects.push({ x: left, y: top, w: right - left, h: bottom - top });
   }
   renderer.setReservedRects(rects);
 }

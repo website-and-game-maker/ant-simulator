@@ -367,17 +367,16 @@ export class Renderer {
     const w = ctx.measureText(label).width + 22;
     const h = 26;
     const x = (this.cssW - w) / 2;
-    let y = 16;
-    // Centered-at-top is only safe on a screen wide enough that the pill's
-    // reach doesn't cross into the top-right icon cluster — true on a
-    // desktop window, not on a phone-width or short-landscape one, where the
-    // two used to overlap and bury half the label under the settings/help
-    // buttons. Drop below the cluster instead of guessing a breakpoint, the
-    // same way the minimap already sidesteps whatever the HUD is covering.
-    const topRight = this.reservedRects.find((r) => r.x + r.w >= this.cssW - 4 && r.y <= h + y);
-    if (topRight && Renderer.rectsOverlap({ x, y, w, h }, topRight)) {
-      y = topRight.y + topRight.h + 8;
-    }
+    // Centered-at-top is only safe on a screen wide enough that the pill
+    // clears the HUD — true on a desktop window, not on a phone, where it
+    // used to run under the stats column and the help button. Take the first
+    // position, top down, that clears every reserved rect, the same way the
+    // minimap sidesteps whatever the HUD is covering.
+    const candidates = [16, ...this.reservedRects.map((r) => r.y + r.h + 8)].sort((a, b) => a - b);
+    const y =
+      candidates.find(
+        (cy) => cy + h <= this.cssH && !this.reservedRects.some((r) => Renderer.rectsOverlap({ x, y: cy, w, h }, r)),
+      ) ?? 16;
     ctx.fillStyle = 'rgba(12, 18, 14, 0.78)';
     ctx.beginPath();
     ctx.roundRect(x, y, w, h, 13);
